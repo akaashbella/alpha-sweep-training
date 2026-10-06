@@ -1,0 +1,37 @@
+# Python caches and environments
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Downloaded datasets
+data/*
+!data/.gitkeep
+
+# Generated experiment artifacts
+checkpoints/*
+!checkpoints/.gitkeep
+results/raw/*
+!results/raw/.gitkeep
+results/summaries/*
+!results/summaries/.gitkeep
+results/figures/*
+!results/figures/.gitkeep
+
+# Common model/checkpoint artifacts outside the canonical directories
+*.pt
+*.pth
+*.ckpt
+
