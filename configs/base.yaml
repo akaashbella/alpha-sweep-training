@@ -1,0 +1,39 @@
+# Research configuration template. This deliberately remains unrunnable until
+# the pending seed IDs and normalization constants in AGENTS.md are approved.
+run:
+  label: research
+  dataset: cifar10
+  architecture: resnet50
+  num_classes: 10
+  seed: null  # Pending scientific/configuration decision.
+  perturbation_alpha: 0.0
+
+dataset:
+  data_root: data
+  split_seed: 0  # Fixed independently from every model/training seed.
+  normalization:
+    mean: null  # Pending scientific/configuration decision.
+    std: null   # Pending scientific/configuration decision.
+    status: unresolved
+  download: false
+  num_workers: 4
+  pin_memory: true
+  train_subset_size: null
+  validation_subset_size: null
+  test_subset_size: null
+
+training:
+  epochs: 200
+  batch_size: 128
+  warmup_epochs: 5
+  optimizer:
+    name: sgd
+    learning_rate: 0.1
+    momentum: 0.9
+    weight_decay: 0.0005
+
+paths:
+  checkpoints: checkpoints
+  results: results/raw
+  logs: logs
+

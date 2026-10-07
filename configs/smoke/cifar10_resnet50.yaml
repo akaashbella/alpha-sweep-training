@@ -1,0 +1,40 @@
+# INFRASTRUCTURE SMOKE TEST ONLY. Outputs are not research results.
+run:
+  label: infrastructure-smoke
+  dataset: cifar10
+  architecture: resnet50
+  num_classes: 10
+  seed: 0
+  perturbation_alpha: 0.0
+
+dataset:
+  data_root: data
+  split_seed: 0
+  normalization:
+    # Provisional common CIFAR-10 values used only to exercise infrastructure.
+    # The final research normalization constants remain unresolved in AGENTS.md.
+    mean: [0.4914, 0.4822, 0.4465]
+    std: [0.2470, 0.2435, 0.2616]
+    status: provisional_smoke_test_only
+  download: true
+  num_workers: 4
+  pin_memory: true
+  train_subset_size: 512
+  validation_subset_size: 256
+  test_subset_size: 256
+
+training:
+  epochs: 2
+  batch_size: 128
+  warmup_epochs: 1
+  optimizer:
+    name: sgd
+    learning_rate: 0.1
+    momentum: 0.9
+    weight_decay: 0.0005
+
+paths:
+  checkpoints: checkpoints/smoke
+  results: results/raw/smoke
+  logs: logs/smoke
+
