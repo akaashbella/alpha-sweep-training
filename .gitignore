@@ -9,6 +9,8 @@ __pycache__/
 htmlcov/
 .venv/
 venv/
+logs/*
+!logs/.gitkeep
 
 # Editors and operating systems
 .idea/
@@ -35,3 +37,6 @@ results/figures/*
 *.pth
 *.ckpt
 
+# Slurm output files created outside the canonical log directory
+slurm-*.out
+slurm-*.err
