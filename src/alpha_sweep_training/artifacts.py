@@ -180,13 +180,10 @@ def _check_existing(paths: RunPaths, config: RunConfig, operation: RunOperation,
         marker = directory / ".run_owner.json"
         _require_plain_file(marker)
         _compatible_record(read_json(marker), expected, marker)
-    summary = paths.results / "summary.json"
-    if summary.exists() or _is_link(summary):
-        _require_plain_file(summary)
-        result = read_json(summary)
-        _compatible_record(result, expected, summary)
-        # Step 5 HEAD preflight owns completion/numerical-terminal decisions.
-        # These summary/metadata status fields are repairable derived views.
+    # HEAD preflight owns completion and immutable result validation. A stale or
+    # damaged derived summary must not veto committed completion or prevent
+    # explicit publication repair. Root/config markers still guard ownership;
+    # the service checks linked targets before writing any derived views.
     # Attempt history is the only pre-existing directory written inside metadata.
     _inspect_directory(paths.metadata / "attempts")
 

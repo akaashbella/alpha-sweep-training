@@ -11,7 +11,7 @@ from .scheduler import WarmupCosineScheduler
 from torch import nn
 from torch.optim import Optimizer
 from .checkpoint_io import fail, same
-from .checkpoint_journal import CommittedState, numerical_failure_evidence, read_committed
+from .checkpoint_journal import CommittedState, numerical_failure_evidence, execution_failure_evidence, read_committed
 from .checkpoints import copy_clean_model, data_identity, decode_rng, model_inventory
 from .metrics import BestSelection, Counters
 from .models import describe_model
@@ -29,9 +29,15 @@ class ContinuationPlan:
     BEFORE attempt/config writes. Call restore only inside that run context.
     """
     def __init__(self, *, data: DataLoaders, model: nn.Module, optimizer: Optimizer,
-                 scheduler: WarmupCosineScheduler, runtime: RuntimePolicy, streams: RuntimeStreams):
+                 scheduler: WarmupCosineScheduler, runtime: RuntimePolicy, streams: RuntimeStreams,
+                 allow_execution_failure: bool = True):
+        if type(allow_execution_failure) is not bool:
+            fail("allow_execution_failure must explicitly be bool")
         self.data, self.model, self.optimizer = data, model, optimizer
         self.scheduler, self.runtime, self.streams = scheduler, runtime, streams
+        # Existing direct callers explicitly select continue. Step 6 auto
+        # dispatch passes False and repeats this gate under the original locks.
+        self.allow_execution_failure = allow_execution_failure
         self._validated = None
         self._restored = False
 
@@ -45,6 +51,9 @@ class ContinuationPlan:
             fail("Numerical failure is terminal; do not automatically continue/retry it")
         if not recovery and numerical_failure_evidence(paths, config, provenance):
             fail("Numerical failure evidence remains terminal even without acknowledgement; use explicit recovery to reconcile it, never automatic retry")
+        if not recovery and not self.allow_execution_failure and (current.status == "failed_execution"
+                or execution_failure_evidence(paths, config, provenance, training_commit_id=current.receipt.commit_id)):
+            fail("Execution failure now requires an explicit continuation choice; automatic dispatch may not bypass it")
         payload = current.latest
         meta, state = payload["metadata"], payload["continuation"]
         self.runtime.require_active(config)

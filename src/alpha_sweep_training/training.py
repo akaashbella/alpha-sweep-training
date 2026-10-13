@@ -162,8 +162,8 @@ def train_run(config: RunConfig, data: DataLoaders, model: nn.Module, optimizer:
               continuation: ContinuationState | None = None, stop: StopRequest | None = None) -> TrainingResult:
     """Train remaining original epochs, then require persisted-best full test.
 
-    No command wraps this function; pass the concrete persistence service explicitly.
-    Step 5 must restore all live components before passing ContinuationState.
+    Step 6's controller supplies the concrete persistence service explicitly.
+    ContinuationPlan restores all live components before passing ContinuationState.
     Returning success requires durable epoch/final/test/summary acknowledgements.
     """
     require_persistence(persistence)  # Fail before computation if the service is absent.

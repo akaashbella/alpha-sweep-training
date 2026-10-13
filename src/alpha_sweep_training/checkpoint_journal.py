@@ -177,6 +177,22 @@ def numerical_failure_evidence(paths, config, provenance) -> tuple[ArtifactRefer
     establishes checkpoint progress; this evidence establishes a terminal stop.
     Explicit recovery reconciles a selected orphan before further publication.
     """
+    return _failure_evidence(paths, config, provenance, status="failed_numerical")
+
+
+def execution_failure_evidence(paths, config, provenance, *, training_commit_id: str) -> tuple[ArtifactReference, ...]:
+    """Unacknowledged execution failures at this latest boundary need a choice.
+
+    Historical failures before subsequent durable training progress remain audit
+    records; they do not permanently block later allocations. Completion wins.
+    """
+    return _failure_evidence(paths, config, provenance, status="failed_execution",
+                             training_commit_id=training_commit_id)
+
+
+def _failure_evidence(paths, config, provenance, *, status, training_commit_id=None):
+    from dataclasses import fields
+    from .metrics import FailureRecord
     from .checkpoint_io import digest_file
     from .artifacts import _is_link
     directory = relative_file(paths.results, "failures/probe").parent
@@ -192,8 +208,29 @@ def numerical_failure_evidence(paths, config, provenance) -> tuple[ArtifactRefer
         context = {key: value for key, value in record.items() if key not in ("kind", "recorded_at_utc", "payload")}
         validate_context(context, config, provenance)
         same(record["kind"], "failure", "failure evidence kind")
-        Counters(**record["payload"]["observed_counters"]).validate(complete_boundary=False)
-        if record["payload"]["status"] == "failed_numerical":
+        payload = exact(record["payload"], {field.name for field in fields(FailureRecord)} |
+            {"authoritative_completed_epochs", "authoritative_commit_id", "replay_required"}, "failure evidence payload")
+        Counters(**payload["observed_counters"]).validate(complete_boundary=False)
+        if payload["status"] not in ("failed_numerical", "failed_execution", "interrupted"):
+            fail("Unknown failure evidence status")
+        count = payload["authoritative_completed_epochs"]
+        if type(count) is not int or not 0 <= count <= EPOCHS or type(payload["replay_required"]) is not bool:
+            fail("Invalid failure evidence authority")
+        commit_id = payload["authoritative_commit_id"]
+        if commit_id is None:
+            if count != 0:
+                fail("Uninitialized failure evidence cannot claim committed epochs")
+        elif (type(commit_id) is not str or len(commit_id) != 32
+                or any(c not in "0123456789abcdef" for c in commit_id)):
+            fail("Invalid failure evidence training commit ID")
+        for key in ("phase", "reason", "exception_type"):
+            if type(payload[key]) is not str:
+                fail(f"Invalid failure evidence {key}")
+        if (type(payload["durable_completed_epochs"]) is not int
+                or not 0 <= payload["durable_completed_epochs"] <= count):
+            fail("Failure evidence acknowledged progress exceeds authority")
+        if (payload["status"] == status and (training_commit_id is None
+                or payload["authoritative_commit_id"] == training_commit_id)):
             result.append(ArtifactReference("results", path.relative_to(paths.results).as_posix(), digest_file(path)))
     return tuple(result)
 

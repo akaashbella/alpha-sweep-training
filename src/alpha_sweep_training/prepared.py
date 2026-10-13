@@ -3,7 +3,10 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-from .cifar_source import OfficialSources, load_official_sources
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .cifar_source import OfficialSources, SourceMetadata
 from .config import ConfigError, RunConfig, load_config
 from .data_contract import (
     ARTIFACT_FOLDER, PREPARATION_VERSION, PREPROCESSING, DatasetArtifactError,
@@ -16,7 +19,7 @@ ARTIFACT_FILES = ("split.json", "normalization.json", "dataset_config.yaml")
 
 @dataclass(frozen=True)
 class PreparedDataset:
-    sources: OfficialSources
+    sources: "OfficialSources | SourceMetadata"
     split: dict
     normalization: dict
     manifest: dict
@@ -52,7 +55,7 @@ def preparation_identity(dataset: str, training_identity: str, test_identity: st
     })
 
 
-def read_prepared_bundle(dataset: str, data_root: Path, sources: OfficialSources) -> PreparedDataset:
+def read_prepared_bundle(dataset: str, data_root: Path, sources) -> PreparedDataset:
     """Require a final manifest and validate contents; never generate/repair data."""
     directory = preparation_directory(data_root, dataset)
     _plain_directory(directory.parent)
@@ -106,8 +109,16 @@ def require_config_association(config: RunConfig, dataset: str, split: dict, nor
         raise DatasetArtifactError("Configuration does not match the prepared dataset/split/normalization identities")
 
 
-def load_prepared_dataset(config: RunConfig, *, base_dir: str | Path) -> PreparedDataset:
-    """Read-only data gate, independent of training/controller research readiness."""
+def load_prepared_dataset(config: RunConfig, *, base_dir: str | Path,
+                          metadata_only: bool = False) -> PreparedDataset:
+    """Read-only data gate, independent of training/controller research readiness.
+
+    metadata_only validates prepared descriptors and current raw files without
+    decoding image arrays. Its sources expose records only, never dataset views.
+    Full loaders use the default and recompute decoded source identities too.
+    """
+    if type(metadata_only) is not bool:
+        raise DatasetArtifactError("metadata_only must be bool")
     storage = config.execution["storage"]
     base = Path(base_dir).expanduser().resolve()
     root = (base / Path(storage["data_root"]).expanduser()).resolve()
@@ -125,7 +136,9 @@ def load_prepared_dataset(config: RunConfig, *, base_dir: str | Path) -> Prepare
     _plain_directory(preparation_directory(root, dataset).parent)
     _plain_directory(preparation_directory(root, dataset))
     _plain_file(preparation_directory(root, dataset) / "manifest.json")
-    sources = load_official_sources(dataset, root, download=False)
+    from .cifar_source import load_official_sources, read_source_metadata
+    sources = (read_source_metadata(dataset, root) if metadata_only
+               else load_official_sources(dataset, root, download=False))
     prepared = read_prepared_bundle(dataset, root, sources)
     require_config_association(config, dataset, prepared.split, prepared.normalization)
     if lock.exists() or lock.is_symlink():

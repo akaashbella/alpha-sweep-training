@@ -7,7 +7,8 @@ import numpy as np
 from torchvision.datasets import CIFAR10, CIFAR100
 from torchvision.datasets.utils import check_integrity, download_and_extract_archive
 
-from .data_contract import DatasetArtifactError, SOURCE_VERSION, content_identity, file_digest
+from .data_contract import (DatasetArtifactError, SOURCE_VERSION, content_identity, file_digest,
+                            read_artifact_json, require_keys, require_version, ARTIFACT_FOLDER)
 from .spec import DATASETS, TEST_SIZE, TRAIN_SIZE, VALIDATION_SIZE
 
 
@@ -17,6 +18,65 @@ class OfficialSources:
     test: CIFAR10 | CIFAR100
     training_record: dict
     test_record: dict
+
+
+@dataclass(frozen=True)
+class SourceMetadata:
+    """Verified prepared source descriptors, without unpickling image arrays."""
+    training_record: dict
+    test_record: dict
+
+
+def read_source_metadata(dataset: str, root: Path) -> SourceMetadata:
+    """Validate descriptors against the same official files/checksums as loaders.
+
+    The preparation descriptor binds decoded-image/label identities to raw file
+    digests. Full loaders additionally decode and recompute those identities.
+    This path never constructs a dataset, model, loader or CUDA object.
+    """
+    cls = dataset_class(dataset)
+    _check_files(root, cls)
+    manifest = read_artifact_json(root / ARTIFACT_FOLDER / dataset / "manifest.json")
+    records = []
+    for key, partition, length, files in (
+        ("training_source", "official_train", TRAIN_SIZE + VALIDATION_SIZE, cls.train_list),
+        ("test_source", "official_test", TEST_SIZE, cls.test_list),
+    ):
+        record = manifest[key]
+        require_keys(record, {"format_version", "dataset", "partition", "length", "num_classes",
+            "image_shape", "image_encoding", "images_sha256", "label_encoding", "labels_sha256",
+            "classes", "files", "identity"}, key)
+        require_version(record["format_version"], SOURCE_VERSION, key)
+        fixed = {"dataset": dataset, "partition": partition, "length": length,
+            "num_classes": DATASETS[dataset], "image_shape": [32, 32, 3],
+            "image_encoding": "uint8_HWC_C_order_official_example_order",
+            "label_encoding": "uint32_little_endian"}
+        if any(content_identity(record[k]) != content_identity(v) for k, v in fixed.items()):
+            raise DatasetArtifactError(f"Invalid {key} descriptor")
+        for name in ("images_sha256", "labels_sha256"):
+            digest = record[name]
+            if type(digest) is not str or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+                raise DatasetArtifactError(f"Invalid {key}.{name}")
+        classes = record["classes"]
+        if (type(classes) is not list or len(classes) != DATASETS[dataset]
+                or any(type(name) is not str or not name for name in classes)
+                or len(set(classes)) != len(classes)):
+            raise DatasetArtifactError(f"Invalid {key} class vocabulary")
+        expected = []
+        for name, md5 in [*(tuple(item) for item in files), (cls.meta["filename"], cls.meta["md5"])]:
+            path = root / cls.base_folder / name
+            if path.is_symlink() or getattr(path, "is_junction", lambda: False)():
+                raise DatasetArtifactError(f"Linked official source: {path}")
+            expected.append({"name": f"{cls.base_folder}/{name}", "official_md5": md5,
+                             "sha256": file_digest(path)})
+        if content_identity(record["files"]) != content_identity(expected):
+            raise DatasetArtifactError(f"Current official files disagree with {key}")
+        if record["identity"] != content_identity({k: v for k, v in record.items() if k != "identity"}):
+            raise DatasetArtifactError(f"Invalid {key} content identity")
+        records.append(record)
+    if records[0]["classes"] != records[1]["classes"]:
+        raise DatasetArtifactError("Official source class vocabularies disagree")
+    return SourceMetadata(*records)
 
 
 def dataset_class(dataset: str):

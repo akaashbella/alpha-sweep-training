@@ -1,7 +1,7 @@
-"""Provenance records supplied by later launchers, separate from scientific hash.
+"""Provenance validation, separate from scientific hash.
 
-This step does not probe the environment or execute Git/project commands. A
-launcher must collect the actual software versions and code state at execution.
+This validator does not probe the environment or execute Git/project commands.
+execution_provenance collects actual software versions and code state at execution.
 """
 
 from copy import deepcopy
@@ -20,7 +20,8 @@ def software_provenance(
     """Validate the minimum future provenance contract without invoking programs.
 
     code: commit (null for uncommitted code), dirty (bool), source_sha256 (the
-    digest of the source snapshot actually executed). software: python, torch,
+    digest of the source snapshot actually executed); dirty may be null when
+    Git is unavailable, accompanied by code.git_unavailable. software: python, torch,
     torchvision, cuda, cudnn versions; cuda/cudnn can be null on CPU.
     Additional JSON-compatible provenance is preserved.
     """
@@ -35,7 +36,8 @@ def software_provenance(
     if code["commit"] is not None and (type(code["commit"]) is not str or not code["commit"]):
         raise ValueError("code.commit must be a nonempty string or null")
     if type(code["dirty"]) is not bool:
-        raise ValueError("code.dirty must be bool")
+        if code["dirty"] is not None or type(code.get("git_unavailable")) is not str or not code["git_unavailable"]:
+            raise ValueError("code.dirty must be bool, or null with an explicit git_unavailable reason")
     digest = code["source_sha256"]
     if type(digest) is not str or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
         raise ValueError("code.source_sha256 must be a lowercase SHA-256 digest")
