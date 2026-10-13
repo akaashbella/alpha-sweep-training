@@ -1,0 +1,93 @@
+# alpha-sweep-training implementation instructions
+
+The authoritative scientific specification is [docs/scientific-specification.md](docs/scientific-specification.md).
+The shared contracts and ordered remaining steps are in [docs/implementation-plan.md](docs/implementation-plan.md).
+Configuration semantics and unresolved decisions are in [docs/configuration.md](docs/configuration.md).
+
+## Implementation-only workflow
+
+These instructions replace any earlier development requirement to run tests or
+preliminary experiments. Inspect the working tree first, preserve existing edits,
+and reuse useful source. During all nine implementation steps:
+
+- Do not run tests, training, evaluation, benchmarks, synthetic experiments, or smoke runs.
+- Do not create tests, smoke configurations, reduced-data experiments, or demonstration notebooks.
+- Do not install packages, download datasets, submit HPC jobs, or execute project code.
+- Do not run compilation, linting, or executable verification commands.
+- Read source, search files, inspect Git status/diffs, and edit files only.
+- Existing tests/smoke files may remain inactive; do not expand or maintain them.
+- Runtime verification happens on OSU HPC after all nine implementation steps.
+- Source inspection does not establish runtime correctness.
+
+Do not stop implementation over unresolved scientific decisions. Represent them
+explicitly, implement actionable execution-time errors, and never promote a
+provisional value into a research default. Keep declarations valid independently
+of whether a model or runtime component has been implemented.
+
+## Fixed scientific scope
+
+Research question: how does training-time Gaussian weight perturbation strength
+affect final clean classification performance across CNN architectures?
+
+Use `W_perturbed = W_clean + alpha * population_std(W_clean) * epsilon`.
+Recompute population standard deviation (`correction=0`) from each entire current
+clean tensor before every mini-batch. Detach scale/noise; draw independent fresh
+standard-normal noise per eligible tensor per mini-batch. Perturb all `Conv2d`
+and `Linear` weights simultaneously, including stems, projections, depthwise,
+pointwise, SE, and classifier weights. Do not directly perturb biases,
+normalization parameters, or buffers. Unperturbed parameters learn normally;
+BatchNorm running statistics update normally. Compute gradients at perturbed
+weights and update clean/master weights without accumulated noise. Alpha is one
+fixed global scalar per run; zero bypasses perturbation. Validate and test clean
+weights.
+
+The grid is CIFAR-10 first, then CIFAR-100; `resnet50`, `mobilenetv3_large`,
+`efficientnet_b0`, `convnext_tiny`; alpha values
+`0, 0.01, 0.02, 0.05, 0.10, 0.20, 0.30, 0.50, 0.75, 1.00`; three training
+seeds reused across alphas. There are 120 runs per dataset, 240 total.
+
+Native 32×32 input; fixed 45,000/5,000 official-training split independent of
+training seed and shared across architectures/alphas/seeds; full official 10,000
+test images. Train transforms: crop with padding 4, horizontal flip, dataset
+normalization. Validation/test transforms are deterministic. Train from scratch;
+apply only the specified CIFAR stems/classifiers and preserve remaining structure.
+
+Every run uses 200 epochs, batch size 128, cross-entropy, five-epoch linear warmup
+then cosine decay, fixed architecture-specific optimizer recipes from the
+specification, and native architecture regularization. No poor-performance early
+stopping, MixUp, CutMix, label smoothing, gradient clipping, or EMA.
+
+Save best-validation and final checkpoints. Highest validation accuracy selects
+best; exact ties keep the earlier epoch. Test every alpha/seed's best checkpoint
+with clean weights. Select best alpha using mean validation accuracy across
+seeds. Prominently preserve individual results; mean/std support them. Record
+epoch metrics, clean layer-weight statistics, and explicit numerical failures.
+
+Quantization, layer-wise perturbation experiments, evaluation-time noise, extra
+datasets, and fine sweeps are outside the main scope. Do not add them implicitly.
+
+## Shared implementation rules
+
+- Scientific schema and constants live in `src/alpha_sweep_training/spec.py`;
+  strict loading/readiness checks live in `config.py`. Keep documentation aligned.
+- Keep storage, allocation settings, and provenance outside scientific hashes.
+- Guard every run-specific write against existing incomplete and completed runs.
+  Missing `summary.json` never authorizes replacement. Writers hold `open_run`'s
+  context throughout their use of the run.
+- New, compatible continuation, and explicitly selected overwrite are different
+  operations. Overwrite preserves old directories in archives.
+- Latest checkpoint means continuation; best means validation selection; final
+  means the full training budget. Allocation end/epoch 200 is not completion:
+  prescribed clean test evaluation and final result artifacts are also required.
+- Implement only the requested step. Document later interfaces; do not add empty
+  modules that imply future functionality already exists.
+
+## HPC constraints
+
+Target OSU `dgxh`: one GPU and one training process per independent
+dataset–architecture–alpha–seed run. Continue across allocations without resetting
+the 200-epoch budget or LR schedule. Storage must be accessible from later nodes.
+Account, resource requests, wall time, and concurrency are configurable. Planning
+defaults: one GPU, eight CPUs, 32 GB host RAM, 12 hours per allocation, up to four
+concurrent tasks across the workflow. These are unmeasured requests, not account
+entitlements. Do not submit jobs during implementation.
