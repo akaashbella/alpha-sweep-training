@@ -1,10 +1,13 @@
 # Shared contracts and remaining implementation steps
 
-Steps 1–2 implement configuration, identity, finite atomic serialization,
+Steps 1–3 implement configuration, identity, finite atomic serialization,
 provenance validation, guarded run initialization, full official CIFAR preparation,
-and reproducible loaders. Dataset implementation has not been executed or
-runtime-verified. Models/training/checkpoints/controllers/Slurm/reporting below
-are future interfaces. There are no placeholder builders or training entry points.
+reproducible loaders, all four scratch CIFAR models, owned eligible-weight
+inventory, fixed optimizers and the original-budget scheduler. Dataset and
+Step 3 implementation have not been executed or runtime-verified. Training,
+checkpoint files, controllers, Slurm and reporting remain future interfaces.
+There are no training entry points. See
+[models-and-optimization.md](models-and-optimization.md) for Step 3 contracts.
 
 ## Responsibilities and interfaces
 
@@ -13,8 +16,8 @@ are future interfaces. There are no placeholder builders or training entry point
 | Configuration | load_config(base_path, dataset_path, model_path, typed overrides) → RunConfig; strict declaration validity separate from require_research_ready | 1 |
 | Dataset preparation | prepare_dataset(config, base_dir, normalization: NormalizationRequest, split_seed, download=False) → PreparationResult; independent explicit split seed; committed manifest and config | 2 implemented |
 | Data loading | build_loaders(config, base_dir, pin_memory=False, persistent_workers=False) → DataLoaders with train/validation/test, metadata, set_epoch, continuation_metadata, restore_next_epoch | 2 implemented |
-| Model construction | build_model(config) → scratch CIFAR-adapted model with dataset classifier; report eligible parameter inventory | 3 |
-| Optimizer/scheduler | build_optimizer(model, config) and build_scheduler(optimizer, config, steps_per_epoch) → exact fixed recipe and original-budget schedule | 3 |
+| Model construction | build_model(config) → scratch CIFAR-adapted model; describe_model(model), discover_eligible_weights(model) → actual metadata/inventory | 3 implemented |
+| Optimizer/scheduler | build_optimizer(model, config), describe_optimizer(optimizer), build_scheduler(optimizer, config, steps_per_epoch, initialize=True) → fixed native recipe and original-budget schedule with in-memory state | 3 implemented |
 | Perturbation | perturbed_training_weights(model, alpha, noise_generator) → exception-safe temporary perturbed view with detached scale/noise and gradients to clean/master parameters | 4 |
 | Clean evaluation | evaluate_clean(model, loader) → full-set loss/accuracy/count with no temporary noise and correct model-mode restoration | 4 |
 | Training | train_run(config, data, model, optimizer, scheduler, run_handle, continuation_state) → epoch records, clean statistics, checkpoint requests, explicit status | 4 |
@@ -57,8 +60,15 @@ cursors; Step 5 also restores separate model/noise/optimizer/scheduler state.
 
 ## Training and scheduler boundary
 
-Step 3 fixes the scheduler equation, first-update indexing, warmup endpoint,
-cosine endpoint, and update cadence using explicit approved configuration.
+Step 3 implements the scheduler equation and completed-unit indexing; warmup
+factor, cosine minimum and cadence require explicit approved configuration and
+remain pending. The first unit uses L*f, n=W reaches L, and n=T is the boundary
+minimum after all T units; the last training unit uses lr(T-1). Epoch cadence
+advances after completed epochs, step cadence after successful optimizer updates.
+AMP-skipped updates do not advance step cadence, and epoch/update counts remain
+separate. Actual loader batch count defines the step horizon, without fixed
+guessed counts. Models use isolated CPU float32 initialization independent of
+alpha; optimizers retain one group of all clean trainable parameters.
 Step 4 consumes the same original 200-epoch schedule; there is no budget field
 for "remaining epochs" or shortened continuation. LR, clean model statistics,
 sample counts, train/validation loss/accuracy, duration, and finite/failure status
@@ -117,6 +127,16 @@ and path relocation alone remain compatible. Extend Step 1's conservative
 code/software check only with an explicit reviewed migration policy. Stale-lock
 and partially initialized-run recovery must preserve existing content.
 
+Construct the clean model, move it to its final device and build its optimizer.
+Construct Step 3's scheduler with initialize=False before restoring optimizer
+state; preflight its descriptor with validate_state_dict. After full checkpoint
+compatibility checks, restore clean model/buffers and optimizer, then scheduler
+state. Scheduler restoration checks saved position, original horizon and actual
+restored optimizer LR before changing its position/rates. Restore completed
+epoch/successful-update counters, scaler, data and separate model/noise RNG state
+before further iteration. See the model/optimization guide for exact order;
+scheduler state handling alone is not full checkpoint compatibility or recovery.
+
 ## Result/status contract and completion
 
 Run status uses an explicit vocabulary: `initialized`, `training`, `interrupted`,
@@ -156,12 +176,12 @@ complete three-seed set. Specify cross-seed std convention and how exact
 validation-mean ties are reported before generating final aggregates. Report
 test results for every alpha/seed, not only the selected alpha.
 
-## Step 2 completed in source; remaining steps in order
+## Steps 2–3 completed in source; remaining steps in order
 
 2. **Dataset preparation and reproducibility (implemented, execution deferred).** Official dataset integrity,
    persistent fixed splits, finalized normalization, seeding/augmentation
    contracts, full-set loaders, and artifact identity verification.
-3. **Four architectures and fixed optimizer recipes.** Scratch CIFAR builders,
+3. **Four architectures and fixed optimizer recipes (implemented, execution deferred).** Scratch CIFAR builders,
    complete eligible-weight inventory, exact recipe construction, documented
    original-budget warmup/cosine scheduler, and explicit remaining decisions.
 4. **Shared training, perturbation, and clean evaluation.** One engine across
@@ -185,4 +205,4 @@ test results for every alpha/seed, not only the selected alpha.
 
 Each implementation step ends with source and Git-diff inspection, not executable
 verification. Do not create tests, smoke configs, demonstrations, preliminary
-experiments, or placeholder modules. Step 2 stops before model/optimizer implementation.
+experiments, or placeholder modules. Step 3 stops before the Step 4 training engine.

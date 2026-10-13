@@ -1,6 +1,6 @@
 # Main experiment: main-v1
 
-This is the authoritative scientific specification. Schema version 2 and
+This is the authoritative scientific specification. Schema version 3 and
 `src/alpha_sweep_training/spec.py` implement its current configuration contract.
 Changes to the scientific specification require explicit agreement and a
 versioned update; execution resource changes do not.
@@ -31,7 +31,7 @@ For every eligible current clean weight tensor, before every mini-batch:
   entirely, including noise sampling. Validation and test use clean weights.
 
 Step 4 implements this contract; there is no perturbation/training implementation
-in Step 1. The configuration records the contract rather than selecting a
+through Step 3. The configuration records the contract rather than selecting a
 particular future autograd implementation.
 
 ## Approved grid and data
@@ -79,8 +79,11 @@ Train from scratch with no pretrained weights. Output 10 classes for CIFAR-10,
 | ConvNeXt-Tiny | 3×3 stem, stride 1, padding 1 |
 
 Keep remaining structure and native regularization (including dropout and
-stochastic depth where present). Step 3 implements builders; all architecture
-names are already valid configuration declarations.
+stochastic depth where present). Step 3 implements builders in source only,
+with isolated CPU float32 initialization independent of alpha, and explicit
+native initialization of replacement stems. ConvNeXt's internal 7×7 depthwise
+convolutions and later downsampling remain unchanged. Classifiers output logits.
+See [the model and optimization guide](models-and-optimization.md).
 
 ## Training and optimization
 
@@ -102,8 +105,21 @@ remain explicit decisions in [the configuration guide](configuration.md).
 `scientific.optimizer.rmsprop_alpha` always means RMSprop's smoothing parameter.
 The optimizer never reads the perturbation alpha as its own smoothing factor.
 Unspecified optimizer arguments use the selected implementation's native
-defaults, whose software version is recorded separately; Step 3 must document
-the arguments actually passed and avoid silently adding a different recipe.
+defaults, whose software version is recorded separately. Step 3 documents the
+arguments passed and effective native defaults in the model/optimization guide.
+All clean trainable parameters, including biases and normalization, occupy one
+group with the declared weight decay. Recipes have not been empirically validated
+in this rebuilt repository.
+
+The implemented versioned scheduler uses completed cadence units n. For epoch
+cadence T=200 and W=5; for optimizer-step cadence both multiply by the actual
+loader training-batch count. For n<W, lr(n)=L*[f+(1-f)*n/W]; for W<=n<=T,
+lr(n)=m+(L-m)*[1+cos(pi*(n-W)/(T-W))]/2. The next unit uses lr(n) before
+completion advances n. Thus lr(0)=L*f, lr(W)=L, and lr(T)=m after T units;
+the last training unit uses lr(T-1). The factor f, minimum m and cadence remain
+pending. Skipped AMP updates do not advance optimizer-step position. Continuation
+preserves the original horizon and separate completed-epoch/successful-update
+counts; see the guide for restoration order. None of this source has been run.
 
 ## Evaluation, reporting, and failures
 

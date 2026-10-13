@@ -2,7 +2,7 @@
 
 ## Schema and current scope
 
-`schema_version: 2` describes the file structure; `scientific.specification_version:
+`schema_version: 3` describes the file structure; `scientific.specification_version:
 main-v1` describes the experiment. The effective document has exactly three top
 keys: `schema_version`, `scientific`, `execution`. No arbitrary extra settings,
 unknown names, duplicate YAML keys, non-string mapping keys, YAML merge keys,
@@ -13,11 +13,18 @@ Step 2 adds two fixed scientific fields: `data.preprocessing_version` and
 `data.randomness_version`. They identify the exact approved padding/flip/tensor
 semantics and local epoch/sample keyed RNG contract. Defaults and declarations
 record them explicitly; alternate values are rejected. Schema 1 declarations
-and full documents receive an explicit additive migration to schema 2, filling
+and full documents receive an explicit additive migration through schema 2, filling
 only fixed contract fields and spelling out tensor conversion in the previously
 implicit transform lists. No pending choice is resolved by migration.
-Saved YAML always uses schema 2. Fingerprint format is now version 2, so older
-run artifacts are incompatible with blind continuation/output reuse.
+Step 3 adds fixed `model.builder_version`, `model.initialization_version` and
+`training.scheduler_version` fields. Schema 2 -> 3 migration fills these contract
+fields; schema 1 -> 2 -> 3 preserves the earlier data migration. Missing sections
+in partial declarations are filled by central defaults. Explicit incompatible
+versions are rejected; pending values, existing normalization/split values and
+operational paths are preserved. Saved effective YAML now uses schema 3.
+Fingerprint format is version 3, so older run artifacts are incompatible with
+blind continuation/output reuse. This does not invalidate shared prepared data
+or authorize rewriting its original checksummed YAML.
 
 `spec.py` centrally defines datasets/class counts, architecture names, ten
 approved alphas, training/split sizes, and all optimizer recipes. `config.py`
@@ -113,6 +120,15 @@ drop_last, split/normalization, and prepared artifacts; the three-seed plan,
 precision, and scheduler may remain pending during development. Actual launchers
 must still call `require_research_ready()` later.
 
+`build_model` requires only validated model settings and a selected training seed.
+It does not require the finalized three-seed list or scheduler/data/HPC decisions.
+`build_optimizer` requires a compatible clean model and the fixed recipe.
+`build_scheduler` requires explicit warmup_start_factor, cosine_min_lr and
+scheduler_interval, plus the actual loader count for optimizer-step cadence.
+Component-specific errors do not change declaration validity. The implemented
+contracts and continuation call order are in
+[models-and-optimization.md](models-and-optimization.md); no component was executed.
+
 ## Scientific identity and provenance
 
 Human-readable run IDs have the form
@@ -122,11 +138,12 @@ rounding: 0.10 and 0.1 map to `0.1`, 1 and 1.00 to `1`, and signed zero to `0`.
 All ten approved values remain distinct. Numeric strings are rejected.
 
 `scientific_fingerprint` returns a full SHA-256 hex digest of sorted canonical
-finite JSON containing fingerprint version 2, schema version 2, and the entire
+finite JSON containing fingerprint version 3, schema version 3, and the entire
 effective scientific section. It includes selected seed, the three-seed plan,
 dataset/model, alpha, full training/optimizer/perturbation/evaluation settings,
 split hash, normalization identity/constants, and resolved precision/backend
-policy, including the preprocessing/randomness versions. Fixed numeric values
+policy, including preprocessing/randomness and builder/initialization/scheduler
+versions. Fixed numeric values
 and alpha are normalized on validation. It excludes
 all execution paths, worker/CPU/RAM requests, allocation wall time, account,
 Slurm IDs, timestamps, and code/software provenance. A version or scientific
@@ -214,7 +231,9 @@ manifest expansion, or final result production. Their interfaces are defined in
 ## Prepared dataset configurations
 
 Preparation writes `<data_root>/.alpha_sweep_prepared/<dataset>/dataset_config.yaml`
-with full loader-compatible schema 2 settings. It supplies the actual split
+with full loader-compatible schema 3 settings for new preparation. Existing
+schema-2 files are migrated in memory on loading and remain unchanged on disk.
+It supplies the actual split
 identity, normalization mean/std, `normalization.source = normalization-v1:sha256:<digest>`,
 and absolute operational data_root/split_file paths. The human constants source
 or derivation description lives in normalization.json and is covered by its
@@ -228,6 +247,10 @@ keeps the original shared YAML unchanged; the preparation API returns this
 caller's effective RunConfig as well. Use the shared file as a base for later
 model/task overrides, not as an unconditional high-priority overlay that might
 replace an already-selected architecture/recipe.
+Apply the corresponding model declaration after that base. Do not reapply a
+dataset declaration containing unresolved split/normalization values over the
+finalized preparation settings. Model/task changes alone do not invalidate the
+source/split/normalization contracts or require preparation again.
 
 After relocating raw/prepared files, override execution.storage.data_root and
 execution.storage.split_file together. Manifest/config checksums validate the
