@@ -6,6 +6,7 @@ Configuration semantics and unresolved decisions are in [docs/configuration.md](
 Implemented dataset/preparation contracts are in [docs/datasets.md](docs/datasets.md).
 Implemented model/optimizer/scheduler contracts are in [docs/models-and-optimization.md](docs/models-and-optimization.md).
 Implemented training/perturbation/evaluation and Step 5 service contracts are in [docs/training-and-perturbation.md](docs/training-and-perturbation.md).
+Implemented durable checkpoint/continuation/recovery contracts are in [docs/checkpoints-and-recovery.md](docs/checkpoints-and-recovery.md).
 
 ## Implementation-only workflow
 
@@ -79,8 +80,8 @@ datasets, and fine sweeps are outside the main scope. Do not add them implicitly
 - Guard every run-specific write against existing incomplete and completed runs.
   Missing `summary.json` never authorizes replacement. Writers hold `open_run`'s
   context throughout their use of the run.
-- New, compatible continuation, and explicitly selected overwrite are different
-  operations. Overwrite preserves old directories in archives.
+- New, compatible continuation, explicit publication recovery, read-only completion
+  inspection and selected overwrite are different operations. Overwrite archives old directories.
 - Latest checkpoint means continuation; best means validation selection; final
   means the full training budget. Allocation end/epoch 200 is not completion:
   prescribed clean test evaluation and final result artifacts are also required.
@@ -110,12 +111,24 @@ datasets, and fine sweeps are outside the main scope. Do not add them implicitly
 - Runtime model/noise streams exclude alpha and are seeded once or restored;
   artifact callbacks preserve them. Honor explicit CUDA/precision/backend policy.
   Managed float16 AMP skips use observed native optimizer calls, never return values.
-- Step 5 must implement TrainingPersistence's commit_epoch, load_best,
+- Step 5 implements TrainingPersistence's commit_initial, commit_epoch, load_best,
   publish_completion and publish_failure. Owned CPU snapshots are read-only;
   acknowledgements mean durable transactions. CSV/logs never determine resume
   position. Load persisted best into a separate evaluation model; never overwrite
-  latest with best weights and final optimizer state. Stop Step 4 before durable
-  persistence/recovery, launchers or signal orchestration.
+  latest with best weights and final optimizer state.
+- HEAD in the metadata root is the sole durable progress point. Immutable files
+  are validated before HEAD; CSV/status/summary aliases are derived views. Protect
+  current/previous references before pruning proven superseded generations.
+  Preserve staging, ambiguous evidence, unrelated files and archives.
+- Continue/recover requires full ContinuationPlan preflight before attempt/config
+  writes and repeated under existing locks. Numerical failure remains terminal;
+  committed completion dominates lost acknowledgement/diagnostic errors.
+  Restore original bindings and native optimizer state, scheduler/scaler/data,
+  then model/runtime/noise RNG last. Never reseed a recovered initial boundary.
+- StopRequest requests finish/discard without signal registration or handler I/O.
+  Stale locks require exact ownership evidence and explicit confirmation that all
+  recorded owners/allocations are inactive across nodes. Never infer this from
+  local PID or age. Step 5 stops before manifests/controllers/launchers and Slurm.
 
 ## HPC constraints
 

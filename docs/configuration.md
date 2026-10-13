@@ -179,7 +179,8 @@ Before continuation, compare marker versions, full run ID, full scientific
 fingerprint, the fingerprint recomputed from saved YAML, and markers in every
 populated selected artifact directory. Checkpoint/result metadata must repeat
 these identities. `open_run` also currently requires the same source digest and
-software mapping; a reviewed code/software migration policy belongs to Step 5.
+software mapping. Step 5 preserves this conservative policy and provides no
+automatic code/software migration.
 Commit/allocation/storage changes alone do not change scientific identity.
 
 ## Safe directories and writes
@@ -221,9 +222,13 @@ these cooperative locks.
 | --- | --- |
 | new (default) | Refuse any existing run artifacts; create fresh owner/config/metadata records |
 | continue | Require existing compatible metadata and resolved YAML, valid populated-directory owners, and matching provenance; preserve artifacts and add an attempt snapshot |
+| recover | Require the same full checkpoint/component preflight and ownership; hold existing locks and record an attempt for explicit committed publication repair |
 | overwrite | Require an existing selected directory and the exact overwrite_run_id; archive all managed run directories beside their original locations with a unique suffix; initialize a new run |
 
-Continue refuses completion recorded in metadata or a summary. Missing/incomplete ownership
+Continue refuses authoritative HEAD completion and terminal numerical failure.
+Metadata/summary status is a derived view, never the continuation authority.
+Continue/recover requires `ContinuationPlan`, fully checked before attempt/config
+writes and again under the existing locks. Missing/incomplete ownership
 or config records do not authorize reuse; stop for recovery or explicitly
 selected archived overwrite. A context exit does not mark a run completed.
 Initialization failure may leave an incomplete directory or a stale lock, which
@@ -233,9 +238,10 @@ deletes artifacts. Linked run directories/ownership/config files are rejected.
 
 Operational paths may change without changing a fingerprint. Continuing after
 relocation requires compatible metadata/config and any populated artifact
-directories to be copied/mounted at their selected new locations; Step 5 must
-check actual checkpoint availability before changing epoch state. These helpers
-do not copy runs or restore checkpoint contents.
+directories to be copied/mounted at their selected new locations. Step 5 checks
+actual checkpoint/record digests and complete component compatibility before any
+restoration or attempt/config writes. Paths/visible device indices alone do not
+invalidate compatible state. These helpers do not copy runs automatically.
 
 `atomic_write_text`, `atomic_write_json`, and `save_resolved_config` serialize to
 a temporary file in the target directory, flush/fsync it, then use `os.replace`;
@@ -245,9 +251,11 @@ permission to replace run artifacts: callers first use the guarded run context.
 keys, NaN/Infinity tokens, and overflowed numbers. Convert unavailable failed
 metrics to null only while recording explicit failure status/reason.
 
-The foundation does not implement checkpoint restoration, a training launcher,
-manifest expansion, or final result production. Their interfaces are defined in
-[the implementation plan](implementation-plan.md).
+Step 5 implements restricted checkpoint files, full restoration and durable
+completion/failure publication with one metadata HEAD commit point. Its storage
+versions leave scientific schema/fingerprint 4 unchanged. See
+[checkpoints-and-recovery.md](checkpoints-and-recovery.md). Training launchers,
+manifest expansion and Slurm remain later steps.
 
 ## Prepared dataset configurations
 

@@ -4,8 +4,9 @@ Step 4 is implemented in source only. No imports, models, forwards/backwards,
 tests, compilation, linting, training, evaluation, installations, downloads,
 artifacts, experiments or jobs were executed to verify it. Runtime correctness
 remains unverified until the authorized OSU HPC work after all nine steps.
-Checkpoint persistence/recovery is Step 5; no training CLI or default persistence
-implementation is supplied.
+Checkpoint persistence/recovery is implemented in Step 5's
+[checkpoint guide](checkpoints-and-recovery.md). The concrete service must be
+supplied explicitly; no training CLI or implicit persistence bypass is supplied.
 
 ## Interfaces and construction order
 
@@ -15,7 +16,7 @@ implementation is supplied.
 | `randomness.RuntimeStreams(config, device, initialize=...)` | Process model RNGs, private noise RNG, owned in-memory states |
 | `perturbation.training_forward(model, inputs, *, alpha, noise_generator)` | Exactly one ordinary or functional training forward |
 | `evaluation.evaluate_clean(model, loader, *, split, config, runtime)` | Full validation/test `ClassificationMetrics` with safe mode restoration |
-| `training.train_run(config, data, model, optimizer, scheduler, run, *, runtime, streams, persistence, continuation=None)` | Remaining original epochs, selection, commits, persisted-best test and completion |
+| `training.train_run(config, data, model, optimizer, scheduler, run, *, runtime, streams, persistence, continuation=None, stop=None)` | Durable initial boundary, remaining original epochs, selection, commits, persisted-best test and completion |
 | `metrics` | Typed counters/results/statistics/failures, finite JSON envelopes and CSV rendering, diagnostic log append |
 | `numerical` | Batched finite diagnostics and clean-state guards |
 | `training_contracts` | Owned snapshots, commit/load/completion receipts and required `TrainingPersistence` protocol |
@@ -29,7 +30,7 @@ Keep `open_run` active throughout trainer/service use. Its handle carries attemp
 provenance and an active lease; escaped handles cannot authorize later writes.
 There is one owning process/thread and one assigned CUDA device per run.
 
-The trainer requires a real Step 5 service before computation and checks whole-run
+The trainer requires the real Step 5 service before computation and checks whole-run
 research readiness. Component constructors retain their narrower readiness gates;
 pending declarations remain valid without importing compute modules. Configuration,
 ownership and service preconditions can raise actionable errors before a training
@@ -221,8 +222,9 @@ Only float16 scaler-managed overflow is a nonterminal recorded skip. Nonfinite
 forward/loss, bad clean/optimizer state, invalid scaler state and nonfinite
 unscaled gradients without a scaler yield `failed_numerical`. Other exceptions
 yield `failed_execution`; caught KeyboardInterrupt/SystemExit yield `interrupted`.
-No signal handler or recovery is implemented. Abrupt termination can prevent any
-failure record; Step 5 must resolve that from durable state.
+No signal handler is registered. Step 5 adds StopRequest and explicit recovery;
+abrupt termination can still prevent failure publication, so recovery follows
+durable HEAD rather than diagnosing completion from logs or allocation end.
 
 `FailureRecord` has phase/epoch/batch, numerical stage, reason/type/affected tensors,
 observed counters, last acknowledged commit and durable completed count. Unavailable loss
@@ -236,7 +238,11 @@ and any publication/logging error; durability is not claimed if publication fail
 
 ## Exact Step 5 handoff
 
-Step 5 must implement all four methods of `TrainingPersistence`:
+Step 5 implements the four methods below plus
+`commit_initial(run, InitialBoundary) -> CommitReceipt`. Fresh training requests
+this durable clean initialized boundary before its first batch: zero counters,
+no best/final, initialized RNG state. The receipt remains a fresh-run receipt,
+not a manufactured ContinuationState. A count-zero continuation restores it.
 
 1. `commit_epoch(run, boundary: EpochBoundary) -> CommitReceipt`: commit latest
    full continuation state, epoch metrics, clean statistics and selection together;
@@ -281,14 +287,16 @@ Observed progress may exceed acknowledged progress when a commit fails. The trai
 stops and reports `unknown_until_acknowledged`; Step 5 reconciles possible committed
 transactions before any replay. A complete acknowledged epoch remains authoritative
 even if its later diagnostic append fails. Replay an unfinished epoch from latest,
-including its saved RNG/scaler/optimizer/scheduler/buffer state. Epoch-zero recovery
-and partially initialized artifacts also belong to Step 5.
+including its saved RNG/scaler/optimizer/scheduler/buffer state. Step 5 also
+handles the durable initialized boundary and rejects partially initialized
+artifacts without authority; existing files stay protected.
 
 Epoch 200 commits `trained_pending_test`. The separate persisted-best model then
 receives full clean test evaluation; only `publish_completion` can authorize a
 `completed` result. Continuation at count 200 executes no training epochs and takes
-the same test/publication path. No checkpoint files, restoration/recovery service,
-Slurm orchestration or runnable training command is implemented in Step 4.
+the same test/publication path. Step 5 supplies checkpoint files, restoration,
+publication repair, conservative lock recovery and finish/discard stop requests.
+Slurm orchestration and runnable training commands remain later steps.
 
 ## Decisions and versions
 

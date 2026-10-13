@@ -3,15 +3,16 @@
 Research implementation for how **training-time Gaussian weight perturbation**
 affects final **clean classification performance** across CNN architectures.
 
-Steps 1–4 implement the scientific specification, strict configuration,
+Steps 1–5 implement the scientific specification, strict configuration,
 scientific run identity, safe artifact initialization, shared CIFAR preparation,
 reproducible full-set loaders, all four scratch CIFAR model builders, eligible
 weight discovery, fixed optimizers, the original-budget warmup/cosine scheduler,
 shared training, functional weight perturbation, clean evaluation, runtime RNG/
-precision policy, metrics and numerical-failure handling. These implementations
-**have not been executed or runtime-verified**. Checkpoint files/recovery, sweep
-execution, Slurm submission and reporting remain later steps. The trainer requires
-a Step 5 persistence service; there is no runnable training command.
+precision policy, metrics, numerical-failure handling, restricted durable
+checkpoints, complete continuation and coordinated publication/recovery.
+These implementations **have not been executed or runtime-verified**.
+Sweep controllers/manifests, launchers, Slurm submission and reporting remain
+later steps; there is no runnable training command.
 
 The main grid contains 240 research runs: CIFAR-10 then CIFAR-100, four
 architectures, ten alphas, three training seeds; each run uses 200 epochs and
@@ -45,6 +46,11 @@ precision/AMP skips, full clean validation/test, finite records, and the exact
 required Step 5 persistence interfaces. Epoch 200 remains `trained_pending_test`
 until persisted-best test and final artifacts are durably published.
 
+The [checkpoint and recovery guide](docs/checkpoints-and-recovery.md) documents
+the concrete persistence service, durable initial boundary, authoritative HEAD,
+bounded role retention, preflight/restoration, stop requests and conservative
+recovery. The [progress note](docs/step5-progress.md) records source-only completion.
+
 The [implementation plan](docs/implementation-plan.md) defines shared interfaces,
-checkpoint/result metadata, completion criteria, and remaining Steps 5–9. The
+checkpoint/result metadata, completion criteria, and remaining Steps 6–9. The
 [HPC design](docs/hpc-design.md) preserves OSU `dgxh` execution requirements.

@@ -5,7 +5,8 @@ constructed; forwards, parameter counts, scheduler trajectories, and continuatio
 have not been executed or runtime-verified. Verification belongs to OSU HPC
 after all nine steps. Step 4's shared training is documented in
 [training-and-perturbation.md](training-and-perturbation.md); checkpoint-file
-persistence and recovery remain Step 5.
+persistence and recovery are implemented in Step 5's
+[checkpoint guide](checkpoints-and-recovery.md), also without execution.
 
 ## Production interfaces and readiness
 
@@ -21,6 +22,7 @@ persistence and recovery remain Step 5.
 | Scheduler properties / `metadata()` | `interval`, `completed_units`, `total_units`, `warmup_units`, `base_learning_rates`, `current_learning_rates`; serializable metadata |
 | Scheduler `state_dict()`, `validate_state_dict(state)`, `load_state_dict(state)` | In-memory continuation state and compatibility checks; no files |
 | Scheduler `require_binding(optimizer, config, steps_per_epoch)` | Step 4 preflight of exact optimizer ownership, original descriptor and installed rates; no LR mutation |
+| Scheduler `learning_rates_at(position)` / `saved_schedule_rates(...)` | Step 5 pure saved-LR/descriptor/counter checks, using the same scheduler equation without initialization |
 
 Construction does not call whole-run research readiness. Models do not require
 datasets, normalization, scheduler decisions, precision policy or Slurm settings.
@@ -84,8 +86,8 @@ distinguishes CPU-only get/set state from global multi-device seeding.
 A module lock serializes these builders. Because CPU RNG/default settings are
 process-global, the future launcher must construct serially before training;
 unrelated concurrent RNG/default-setting mutations are unsupported. Initialization
-does not seed future dropout, model-runtime or perturbation streams. Step 4 must
-give those streams explicit ownership; Step 5 must restore their states. No
+does not seed future dropout, model-runtime or perturbation streams. Step 4 gives
+those streams explicit ownership; Step 5 restores their states last. No
 training seed fallback or three-seed list is supplied.
 
 Model metadata records contract versions, dataset/classes, selected and derived
@@ -200,7 +202,8 @@ epoch/warmup budgets, relevant steps_per_epoch, original base LR list, explicit
 factor/minimum and completed_units. Unknown fields, wrong types, changed horizons,
 groups/options/base LRs and out-of-range positions are errors. State is independent
 of experiment alpha. Scheduler compatibility is one part of full continuation;
-checkpoint files, atomic persistence, recovery and run-lock use remain Step 5.
+checkpoint files, atomic persistence, recovery and run-lock use are implemented
+in Step 5, as documented in the checkpoint guide.
 
 ## Remaining decisions and scope
 
@@ -222,6 +225,6 @@ Operational paths and model selection do not change dataset artifact identities.
 Step 4 implements functional perturbation, runtime RNG/precision setup, shared
 training, clean evaluation, metrics, layer statistics and explicit failures.
 It retains the original optimizer/model ownership and scheduling contract above.
-Step 5 must provide its required persistence service and full restoration before
-a training workflow can run. Controllers, submissions, reporting and HPC runtime
+Step 5 provides the concrete persistence service, full preflight/restoration and
+durable initial/epoch boundaries. Controllers, submissions, reporting and HPC runtime
 checks remain later steps.

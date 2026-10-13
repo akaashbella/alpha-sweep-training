@@ -147,7 +147,7 @@ deviation. Reporting must state its standard-deviation convention explicitly;
 the cross-seed summary convention and best-alpha tie handling are to be finalized
 for Step 8, without concealing ties or missing/failed seeds.
 
-Numerical failures are explicit terminal or recoverable status records with
+Numerical failures are explicit terminal status records with
 reason, epoch/step, and the affected metric/tensor where available. JSON numeric
 fields with unavailable or nonfinite results are `null` accompanied by failure
 metadata, never NaN/Infinity tokens, fabricated scores, or successful completion.
@@ -165,7 +165,11 @@ evaluation and final result artifacts are required; see [the checkpoint and
 result contracts](implementation-plan.md).
 Step 4 requires the Step 5 persistence service to commit complete epoch boundaries
 and load persisted best into a separate model for full test. It supplies owned
-in-memory snapshots and typed records, but implements no checkpoint files/recovery.
+in-memory snapshots and typed records. Step 5 implements restricted clean
+checkpoints, a durable initialized boundary, full continuation and coordinated
+publication/recovery under the existing locks. Storage/journal versions are
+independent of the unchanged scientific fingerprint. See
+[checkpoints-and-recovery.md](checkpoints-and-recovery.md).
 
 Quantization, layer-wise perturbation experiments, evaluation-time noise,
 additional datasets, and fine sweeps are outside this main implementation.

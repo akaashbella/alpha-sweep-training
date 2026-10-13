@@ -50,3 +50,12 @@ the complete training budget, durable best/final checkpoints, clean evaluation
 of each run's best model on the full official test set, epoch/weight statistics,
 and a valid final result summary. Numerical failure must remain visible to
 controller and aggregation. See [the shared contracts](implementation-plan.md).
+
+Step 5's [checkpoint/recovery APIs](checkpoints-and-recovery.md) are implemented
+without execution. Future launchers/controllers must use full continuation
+preflight, read-only committed completion inspection and the active run lease.
+Future signal handlers request StopRequest finish/discard; they perform no
+serialization. Stale locks require explicit confirmation of inactive owners
+across nodes, never local PID/age guesses. Numerical failure is terminal, and
+lost completion acknowledgement must be reconciled before any rerun/resubmission.
+No manifest/controller/launcher or Slurm scripts are implemented in Step 5.

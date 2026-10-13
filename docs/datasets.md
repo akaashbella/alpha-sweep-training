@@ -258,4 +258,6 @@ Step 2. Step 3's model builders, optimizers and scheduler now exist in source,
 without execution; see [models-and-optimization.md](models-and-optimization.md).
 Step 4's [shared trainer](training-and-perturbation.md) now consumes these loaders
 and their completed-epoch continuation interface, without changing data streams or
-generating artifacts. Checkpoint persistence/recovery and Slurm remain later steps.
+generating artifacts. Step 5's [continuation service](checkpoints-and-recovery.md)
+validates the existing data metadata and restores its next-epoch contract without
+changing prepared files or generating data. Slurm remains a later step.
