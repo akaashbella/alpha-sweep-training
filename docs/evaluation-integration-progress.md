@@ -50,3 +50,21 @@ remain outside this integration. No source requirement is intentionally deferred
 No tests, project execution/imports, executable verification, installations,
 downloads, preparation/artifact generation, experiments or jobs were performed.
 Scientific decisions remain pending; no provisional values have been promoted.
+
+Follow-up source correction: sweep contention now uses typed
+SweepFinalizationDeferred after checking compatible lock ownership evidence.
+Execution preserves selected-slot successes, reports deferred finalization and
+does not generate exit 21 solely for contention. Coverage separates deferred
+inspection/reason from genuine inspection errors and exposes publication pending.
+Linked/malformed/incompatible lock evidence and I/O/integrity failures stay
+explicit; no other owner's lock is removed. Statically traced compatible
+contention, released-lock race, malformed/linked/mismatched lock rejection,
+all-28 authority gating and unchanged lost-ack reconciliation.
+Sweep lock ownership is published as a complete same-directory atomic hard link
+from a fsynced owned staging record, avoiding transient partial-owner reads.
+Genuine follow-up inspection errors retain failure classification after contention.
+Raw records, checkpoint bindings, seeds, scientific fingerprints and training
+state are unchanged.
+This correction starts from a clean working tree and changes three source modules
+and three documentation files only. No tests or project/executable verification
+were created or run; Step 7 remains unimplemented and runtime correctness unverified.

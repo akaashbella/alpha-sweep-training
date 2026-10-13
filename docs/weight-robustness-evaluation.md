@@ -189,6 +189,30 @@ A separate immutable completion document and SWEEP_HEAD prove
 Successful raw slots with missing sweep publication are reported as publication
 pending; another evaluation invocation skips their passes and reconciles the
 completion marker. Settled failed sweeps remain distinct from successful coverage.
+Sweep-lock contention with a validated compatible owner raises
+`SweepFinalizationDeferred`; execution reports `completion_finalization_deferred`
+and, while authority remains unverified, `sweep_finalization_deferred`. Deferral
+alone contributes exit 0 and preserves successful selected-slot outcomes; existing
+slot failures/interruption/rejection retain their exit classifications. Reinspect
+or invoke evaluation again after the owner exits; no lock is stolen or removed.
+Malformed/non-file/linked lock evidence, mismatched checkpoint/protocol bindings
+and genuine I/O/integrity failures remain explicit errors, not contention.
+Sweep lock acquisition stages a complete, fsynced owner record and creates the
+exclusive `.sweep.lock` via a same-directory atomic hard link, so cooperating
+readers cannot see a partly written owner. Only the acquiring invocation's own
+staging file and token-verified acquired lock are cleaned up. Interrupted staging
+evidence remains protected. Hard-link support and fsync durability are future HPC
+filesystem requirements; no runtime capability or durability was verified here.
+
+Coverage separates `completion_inspection_deferred` and its
+`completion_deferred_reason` from genuine `completion_inspection_error`.
+`completion_publication_pending` means all 28 raw slots are successful but sweep
+authority has not been verified, including deferred or failed inspection.
+Neither selected-slot success nor deferral proves `robustness_completed`: that
+field requires verified SWEEP_HEAD and all 28 current successful references.
+Lost-acknowledgement reconciliation still recognizes a verified committed sweep.
+Genuine completion-inspection errors observed after contention retain exit 21;
+they cannot be hidden by an earlier deferral diagnostic.
 Read-only coverage separates stored statuses from locked/partial/incompatible/
 unstable/inspection conditions. Changing owner/HEAD/lock tokens invalidate a read;
 the report is not an atomic grid snapshot. Historical completion is distinguished

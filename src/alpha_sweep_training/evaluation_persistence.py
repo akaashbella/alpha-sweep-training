@@ -24,6 +24,56 @@ PRESERVATION = {"verified": True, "method": "exact_owned_baseline",
                 "scope": "all_parameters_buffers_bindings_prior_modes"}
 
 
+class SweepFinalizationDeferred(RuntimeError):
+    """Expected contention, without publication failure or completion proof."""
+    def __init__(self, path):
+        self.lock_path = str(path)
+        super().__init__(f"Sweep finalization deferred after concurrent lock contention at {path}; "
+                         "reinspect completion or invoke evaluation again after the owner exits; no lock was removed")
+
+
+def inspect_sweep_lock(path, binding_sha256):
+    """Read-only compatible-owner check; unsafe locks and I/O errors stay errors.
+
+    No PID/age liveness inference. A valid recorded owner may require operator
+    review if it has stopped; neither inspection nor contention removes it.
+    A lock removed by its owner during inspection is no longer an obstruction.
+    """
+    if _is_link(path):
+        fail("Linked sweep lock requires manual review")
+    try:
+        if not path.is_file():
+            if _is_link(path):
+                fail("Sweep lock became linked during inspection")
+            if path.exists():
+                fail("Non-file sweep lock requires manual review")
+            return None
+        value = read_json(path)
+    except FileNotFoundError:
+        if _is_link(path):
+            fail("Sweep lock became linked during inspection")
+        return None
+    if _is_link(path):
+        fail("Sweep lock became linked during inspection")
+    exact(value, {"binding_sha256", "token", "hostname", "pid", "created_at_utc"}, "sweep lock owner")
+    same(value["binding_sha256"], binding_sha256, "sweep lock checkpoint/protocol binding")
+    token = value["token"]
+    if type(token) is not str or len(token) != 32 or any(c not in "0123456789abcdef" for c in token):
+        fail("Malformed sweep lock ownership token; manual review required")
+    if type(value["hostname"]) is not str or not value["hostname"] or type(value["pid"]) is not int or value["pid"] < 1:
+        fail("Malformed sweep lock host/PID evidence; manual review required")
+    timestamp = value["created_at_utc"]
+    if type(timestamp) is not str:
+        fail("Malformed sweep lock creation time; manual review required")
+    try:
+        created = datetime.fromisoformat(timestamp)
+    except ValueError:
+        fail("Malformed sweep lock creation time; manual review required")
+    if created.utcoffset() != timezone.utc.utcoffset(created):
+        fail("Sweep lock creation time must carry UTC timezone evidence")
+    return value
+
+
 def evaluation_directory(inputs, *, evaluation_root=None) -> Path:
     storage = inputs.config.execution["storage"]
     base = Path(evaluation_root).expanduser().absolute() if evaluation_root is not None else Path(
@@ -227,25 +277,44 @@ class EvaluationLease:
 
 
 @contextmanager
-def _exclusive_lock(path, owner):
+def _exclusive_lock(path, owner, *, defer_sweep_contention=False):
     if _is_link(path):
         fail("Linked evaluation lock requires manual review")
     token = uuid.uuid4().hex
+    document = {**owner, "token": token, "hostname": socket.gethostname(),
+                "pid": os.getpid(), "created_at_utc": datetime.now(timezone.utc).isoformat()}
+    acquired, staging = False, None
     try:
-        descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    except FileExistsError as exc:
-        fail(f"Evaluation lock exists: {path}; never steal by PID/age ({exc})")
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            from .serialization import strict_json_text
-            stream.write(strict_json_text({**owner, "token": token, "hostname": socket.gethostname(),
-                "pid": os.getpid(), "created_at_utc": datetime.now(timezone.utc).isoformat()}))
-            stream.flush()
-            os.fsync(stream.fileno())
+        if defer_sweep_contention:
+            # Publish complete sweep ownership atomically: another finalizer
+            # must never observe our just-created empty/partially written lock.
+            candidate = path.with_name(f"{path.name}.{token}.acquire.json")
+            if candidate.exists() or _is_link(candidate):
+                fail("Sweep lock staging path already exists; preserve it")
+            atomic_write_json(candidate, document)
+            staging = candidate
+            try:
+                os.link(staging, path)  # Exclusive, same-directory atomic creation.
+            except FileExistsError as exc:
+                inspect_sweep_lock(path, owner["binding_sha256"])
+                # A released-lock race also defers; no stealing/acquisition retry.
+                raise SweepFinalizationDeferred(path) from exc
+            acquired = True
+        else:
+            try:
+                descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            except FileExistsError as exc:
+                fail(f"Evaluation lock exists: {path}; never steal by PID/age ({exc})")
+            acquired = True
+            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                from .serialization import strict_json_text
+                stream.write(strict_json_text(document))
+                stream.flush()
+                os.fsync(stream.fileno())
         fsync_directory(path.parent)
         yield
     finally:
-        if path.is_file() and not _is_link(path):
+        if acquired and path.is_file() and not _is_link(path):
             try:
                 recorded = read_json(path)
             except (OSError, ValueError):
@@ -253,6 +322,10 @@ def _exclusive_lock(path, owner):
             if type(recorded) is dict and recorded.get("token") == token:
                 path.unlink()
                 fsync_directory(path.parent)
+        if staging is not None and staging.is_file() and not _is_link(staging):
+            same(read_json(staging), document, "owned sweep lock staging")
+            staging.unlink()
+            fsync_directory(staging.parent)
 
 
 @contextmanager
@@ -325,13 +398,14 @@ def open_evaluation_slot(inputs, slot, *, evaluation_root=None, provenance, retr
 
 
 def publish_robustness_completion(inputs, *, evaluation_root=None, provenance):
-    """Durable all-success authority; no failed/missing slot can enter it."""
+    """Durable all-success authority; compatible sweep contention is typed deferral."""
     from .evaluation_protocol import prescribed_slots
     from .evaluation_coverage import inspect_robustness_completion
     root = evaluation_directory(inputs, evaluation_root=evaluation_root)
     if not root.is_dir():
         return None
-    with _exclusive_lock(root / ".sweep.lock", {"binding_sha256": content_identity(inputs.binding)}):
+    with _exclusive_lock(root / ".sweep.lock", {"binding_sha256": content_identity(inputs.binding)},
+                         defer_sweep_contention=True):
         same(read_json(_file(root, "owner.json")), inputs.binding, "sweep owner")
         existing = inspect_robustness_completion(root, inputs)
         if existing is not None:

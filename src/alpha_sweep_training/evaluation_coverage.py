@@ -3,7 +3,8 @@
 from .artifacts import _is_link
 from .checkpoint_io import digest_file, exact, fail, same
 from .data_contract import content_identity
-from .evaluation_persistence import evaluation_directory, read_slot, validate_result, _file, _read_reference
+from .evaluation_persistence import (evaluation_directory, read_slot, validate_result,
+                                     inspect_sweep_lock, _file, _read_reference)
 from .evaluation_protocol import prescribed_slots
 from .serialization import read_json
 
@@ -121,15 +122,22 @@ def collect_evaluation_coverage(inputs, *, evaluation_root=None, evaluator_prove
     counts.update({condition: sum(row["condition"] == condition for row in rows) for condition in
                    ("locked", "partial", "incompatible", "unstable", "inspection_error")})
     completion, completion_error = None, None
+    completion_deferred, deferred_reason = False, None
     try:
-        if (root / ".sweep.lock").exists() or any(row["condition"] in ("locked", "unstable") for row in rows):
-            completion_error = "Concurrent writer; sweep authority inspection deferred"
+        sweep_owner = inspect_sweep_lock(root / ".sweep.lock", content_identity(inputs.binding))
+        if sweep_owner is not None:
+            completion_deferred, deferred_reason = True, "Compatible sweep lock owner; finalization/authority inspection deferred"
+        elif any(row["condition"] in ("locked", "unstable") for row in rows):
+            completion_deferred, deferred_reason = True, "Concurrent slot writer or unstable slot read; sweep authority inspection deferred"
         elif root.exists():
             before = _token(root / "SWEEP_HEAD.json")
             completion = inspect_robustness_completion(root, inputs)
-            if before != _token(root / "SWEEP_HEAD.json"):
-                completion, completion_error = None, "Sweep authority changed during inspection"
+            sweep_owner = inspect_sweep_lock(root / ".sweep.lock", content_identity(inputs.binding))
+            if sweep_owner is not None or before != _token(root / "SWEEP_HEAD.json"):
+                completion = None
+                completion_deferred, deferred_reason = True, "Sweep authority/owner changed during inspection; reinspection deferred"
     except Exception as exc:
+        completion = None
         completion_error = f"{type(exc).__name__}: {exc}"
     return {"evaluation_coverage_version": 1, "lifecycle": "evaluation", "binding": inputs.binding,
         "namespace": str(root), "counts": counts, "slots": rows,
@@ -138,4 +146,6 @@ def collect_evaluation_coverage(inputs, *, evaluation_root=None, evaluator_prove
         "all_slots_successful": success == len(rows), "robustness_completed": completion is not None and success == len(rows),
         "historical_robustness_completion": completion,
         "settled_with_failures": success + counts["failed"] == len(rows) and counts["failed"] > 0,
-        "completion": completion, "completion_inspection_error": completion_error}
+        "completion": completion, "completion_inspection_error": completion_error,
+        "completion_inspection_deferred": completion_deferred, "completion_deferred_reason": deferred_reason,
+        "completion_publication_pending": success == len(rows) and completion is None}

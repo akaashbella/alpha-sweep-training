@@ -8,7 +8,8 @@ from .checkpoint_io import same, fail
 from .evaluation_inputs import bind_evaluation_checkpoint
 from .evaluation_protocol import (prescribed_slots, perturbation_seed,
                                  select_evaluation_slots, EvaluationProtocolError)
-from .evaluation_persistence import PRESERVATION, open_evaluation_slot, publish_robustness_completion
+from .evaluation_persistence import (PRESERVATION, SweepFinalizationDeferred,
+                                     open_evaluation_slot, publish_robustness_completion)
 from .evaluation_coverage import collect_evaluation_coverage, observe_evaluation_slot
 from .execution_provenance import collect_provenance
 from .manifests import manifest_from_dict, select_task
@@ -255,6 +256,9 @@ def execute_evaluation(manifest, task, *, base_dir, source_root, overrides=None,
             outcomes.append({**slot.to_dict(), "outcome": "rejected", "exit_code": 22, "diagnostic": f"{type(exc).__name__}: {exc}"})
     try:
         publish_robustness_completion(inputs, evaluation_root=evaluation_root, provenance=provenance)
+    except SweepFinalizationDeferred as exc:
+        outcomes.append({"outcome": "completion_finalization_deferred", "exit_code": 0,
+                         "diagnostic": str(exc), "lock_path": exc.lock_path})
     except Exception as exc:
         outcomes.append({"outcome": "completion_publication_error", "exit_code": 21,
                          "diagnostic": f"{type(exc).__name__}: {exc}"})
@@ -263,8 +267,16 @@ def execute_evaluation(manifest, task, *, base_dir, source_root, overrides=None,
         for row in outcomes:
             if row["outcome"] == "completion_publication_error":
                 row.update(outcome="robustness_completed_after_lost_ack", exit_code=0)
+    elif coverage["completion_inspection_error"] is not None and not any(
+            row["outcome"] == "completion_publication_error" for row in outcomes):
+        outcomes.append({"outcome": "completion_inspection_error", "exit_code": 21,
+                         "diagnostic": coverage["completion_inspection_error"]})
     codes = {row["exit_code"] for row in outcomes}
     code = next((c for c in (22, 20, 21, 10) if c in codes), 0)
+    finalization_deferred = coverage["completion_inspection_error"] is None and (
+        coverage["completion_inspection_deferred"] or any(
+            row["outcome"] == "completion_finalization_deferred" for row in outcomes))
     outcome = "robustness_completed" if coverage["robustness_completed"] else (
-        "evaluation_interrupted" if interrupted else "selected_slots_processed")
+        "evaluation_interrupted" if interrupted else (
+            "sweep_finalization_deferred" if finalization_deferred else "selected_slots_processed"))
     return EvaluationOutcome(selected.run_id, inputs.protocol.fingerprint, outcome, code, tuple(outcomes), coverage)

@@ -314,3 +314,11 @@ Reports expose clean/positive success, pending/failed/interrupted/locked/
 incompatible conditions and complete robustness authority separately from
 training completion. See the evaluation guide for exact APIs, commands, versions,
 raw schemas and Step 7/8 handoffs. No jobs, signals, means/std or plots are added.
+
+Sweep finalization may report `sweep_finalization_deferred` when another validated
+compatible finalizer holds its lock. Contention alone does not generate exit 21 or
+change successful selected-slot outcomes. Coverage uses separate completion
+inspection-deferred/reason/error fields and `completion_publication_pending`;
+only verified all-28 sweep authority establishes `robustness_completed`. Unsafe
+lock evidence and genuine publication failures remain errors. No automatic lock
+removal, retries or Step 7 orchestration are introduced.
