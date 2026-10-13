@@ -270,4 +270,6 @@ Step 4's [shared trainer](training-and-perturbation.md) now consumes these loade
 and their completed-epoch continuation interface, without changing data streams or
 generating artifacts. Step 5's [continuation service](checkpoints-and-recovery.md)
 validates the existing data metadata and restores its next-epoch contract without
-changing prepared files or generating data. Slurm remains a later step.
+changing prepared files or generating data. Step 7 now supplies source-only
+[Slurm/signal integration](slurm-workflow.md). Data workers ignore advance warnings
+without changing sample streams, prepared artifacts or the read-only data contract.

@@ -10,6 +10,8 @@ Implemented durable checkpoint/continuation/recovery contracts are in [docs/chec
 Implemented manifest/controller/provenance/coverage contracts are in [docs/manifests-and-controller.md](docs/manifests-and-controller.md).
 The approved independent evaluation protocol supersedes clean-only testing:
 [docs/weight-robustness-evaluation.md](docs/weight-robustness-evaluation.md).
+Implemented production scheduling, operational policy, signals and workflow authority:
+[docs/slurm-workflow.md](docs/slurm-workflow.md).
 
 ## Implementation-only workflow
 
@@ -168,6 +170,20 @@ replicates 1–3 (28 slots/checkpoint, 6,720 total). Do not add other perturbati
   writer lease throughout a pass. Preserve raw slots, failures and orphan evidence;
   successful slot and sweep HEAD references are authority. No aggregation/plots
   or actual job orchestration during this integration.
+- Step 7 source implements one shared registry/controller for both datasets and
+  lifecycles. At most one unresolved bounded wave reserves shared capacity;
+  accounting/submission ambiguity never frees it. Validate combined resource-time
+  requests and actual account/QOS evidence before future explicit submission.
+- Persist exact submission intent before sbatch, then record the actual array ID.
+  Never blindly resubmit a lost acknowledgement. Workers validate sealed manifest/
+  policy/index/source/checkpoint linkage and one independent allocation claim.
+- Batch Bash execs the owning Python PID; B:USR1 reaches that process. Signal
+  handlers only update StopRequest. No I/O, CUDA, locks or scheduler work in handlers.
+  DataLoader workers ignore advance warnings; stop replay uses existing boundaries.
+- Automatic replacement requires explicit verified clean interruption and compatible
+  authority. Numerical failure is terminal; execution/unclassified failures need
+  an audited operator decision. Bound allocation intents and preserve exhaustion.
+  Step 7 commands are implemented but never run during source-only development.
 
 ## HPC constraints
 

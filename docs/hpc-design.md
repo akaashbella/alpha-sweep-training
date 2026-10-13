@@ -1,8 +1,9 @@
 # OSU dgxh execution contract
 
-This is a design for Step 7, not a submission implementation or a measurement of
-resource requirements. No jobs or preliminary experiments are submitted during
-the nine implementation steps.
+Step 7 implements this contract in source, without execution or measurements.
+The exact commands, operational schema, registry, signals and operator recovery
+are in [slurm-workflow.md](slurm-workflow.md). No jobs, Slurm queries or preliminary
+experiments were performed during implementation; runtime correctness is unverified.
 
 Target OSU's `dgxh` partition. Run **one GPU and one training process** for each
 independent dataset–architecture–alpha–training-seed combination. There are 120
@@ -16,11 +17,13 @@ recipe is implied. Parallel task execution must not change the scientific run.
 | Host RAM per task | 32 GB |
 | Wall time per allocation | 12 hours |
 | Concurrent tasks across the workflow | Up to 4 |
+| Advance warning | 600 seconds, discard by default |
 | Account | Explicitly supplied for the actual allocation; unresolved |
 
 These are planning defaults, not measured requirements or guaranteed account
 entitlements. Account, CPU/RAM requests, wall time, and concurrency are
-configurable in `execution.slurm`; one GPU and `dgxh` express this main workflow's
+configured in separate version-1 `configs/workflow.yaml` and applied as typed
+execution-only overrides; one GPU and `dgxh` express this main workflow's
 fixed execution design. Do not claim currently available cluster/account limits
 without verifying them during the future authorized operational phase.
 
@@ -40,11 +43,12 @@ independent evaluation from immutable best rather than retrain. Training command
 count-200 continuation only reconciles training completion; robustness has its
 own allocations/slot resumption and never restores training optimizer/RNG state.
 
-Step 7 must coordinate a **workflow-wide** concurrency limit; independently
-setting both dataset arrays to four tasks could accidentally launch eight.
-Define the dataset ordering dependency and shared task status handling so
+Step 7 uses one persistent **workflow-wide** registry/controller and at most one
+unresolved bounded wave across both datasets and lifecycles. Never independently
+give each array four slots. Immutable array mappings and shared status ensure
 CIFAR-10 is processed first, followed by CIFAR-100. Submission/requeue logic must
-also cooperate with per-storage-root run locks, handle actual allocation limits,
+also cooperate with per-storage-root run locks, validate aggregate requested
+GPU/CPU/memory-time against dated published and reviewed account/QOS limits,
 and leave explicit interrupted/failure status when an allocation stops.
 
 An allocation ending proves neither lifecycle complete. Training completion
@@ -57,8 +61,9 @@ controller and aggregation. See [the shared contracts](implementation-plan.md).
 Step 5's [checkpoint/recovery APIs](checkpoints-and-recovery.md) are implemented
 without execution. The Step 6 launcher/controller uses full continuation
 preflight, read-only committed completion inspection and the active run lease.
-Future signal handlers request StopRequest finish/discard; they perform no
-serialization. Stale locks require explicit confirmation of inactive owners
+The production allocation runner installs scoped StopRequest handlers. Bash execs
+the owning Python PID, making B:USR1 delivery explicit; handlers perform no I/O,
+logging, serialization, subprocess, CUDA or lock work. Stale locks require explicit confirmation of inactive owners
 across nodes, never local PID/age guesses. Numerical failure is terminal, and
 lost completion acknowledgement must be reconciled before any rerun/resubmission.
 Step 6's [manifest/controller guide](manifests-and-controller.md) documents
@@ -83,8 +88,12 @@ actual assigned-device/backend details. Status probes no GPU and validates saved
 authority using historical provenance. It is a read-only set of individual
 observations, not an atomic grid snapshot. Retain unsuccessful CLI outcomes when
 failure publication was unavailable. Exit codes and ended allocations alone cannot
-prove completion. No Slurm scripts, signal registration or retry loops are
-implemented; account/resource entitlement checks still belong to future operation.
-Step 7 must enforce workflow-wide concurrency across both training and evaluation,
-choose evaluation job grouping/dependencies, and route StopRequest without handler
-I/O. Training ordering is CIFAR-10 first; evaluation scheduling is a separate policy.
+prove completion. Step 7 implements render-only scripts, explicit guarded submission,
+one-shot reconciliation/advancement and bounded clean-interruption continuation;
+no daemon, automatic requeue or numerical-failure retry is implied. Account/resource
+evidence, accounting and shared-filesystem behavior remain future operational checks.
+OSU's [published dgxh policy](https://it.engineering.oregonstate.edu/hpc/slurm-howto),
+consulted 2026-10-13, caps aggregate GPU-time at 48 GPU-hours; four one-GPU twelve-hour
+requests consume that allowance. Unknown submissions/scheduler state retain the
+entire wave's reservation. Training ordering is CIFAR-10 first; pending evaluation
+does not block otherwise eligible CIFAR-100 training. See the operating guide.

@@ -298,9 +298,11 @@ epochs, loaders, CUDA, optimizer/scheduler/scaler or stream restoration. Legacy
 trained_pending_test/evaluating/completed are handled explicitly as v1 evidence;
 they never imply complete robustness. Step 5 supplies checkpoint files, restoration,
 publication repair, conservative lock recovery and finish/discard stop requests.
-Step 6 connects runnable production task commands in source; Slurm/signal
-orchestration remains Step 7. Independent evaluation provides its own test loader,
-evaluation-only runtime, fixed whole-pass perturbation and exact whole-state guard.
+Step 6 connects runnable production task commands in source. Step 7's
+[operational runner](slurm-workflow.md) now supplies scoped signals/submission in
+source, while this engine remains the sole training implementation. Independent
+evaluation supplies its test-only loader/runtime, fixed full-pass perturbation
+and exact whole-state guard.
 
 ## Decisions and versions
 

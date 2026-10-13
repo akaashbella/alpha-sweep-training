@@ -4,7 +4,7 @@ Research implementation for how **training-time Gaussian weight perturbation**
 affects clean performance and independently measured fixed-network weight
 robustness across CNN architectures.
 
-Steps 1–6 implement the scientific specification, strict configuration,
+Steps 1–7 implement the scientific specification, strict configuration,
 scientific run identity, safe artifact initialization, shared CIFAR preparation,
 reproducible full-set loaders, all four scratch CIFAR model builders, eligible
 weight discovery, fixed optimizers, the original-budget warmup/cosine scheduler,
@@ -16,7 +16,8 @@ The approved post-Step-6 integration separates training completion from independ
 `weight_robustness_eval_v1`: one clean and 27 perturbed full-test realizations per
 best checkpoint, 6,720 logical slots across the unchanged 240 training tasks.
 These implementations **have not been executed or runtime-verified**.
-Slurm submission/signal orchestration and reporting remain later steps.
+Step 7 adds production Slurm planning/submission, signals and durable workflow
+tracking in source. Aggregation/plotting and final integration remain later steps.
 Production commands are implemented for later authorized HPC use only.
 
 The main grid contains 240 research runs: CIFAR-10 then CIFAR-100, four
@@ -71,5 +72,11 @@ legacy handling and Step 7/8 interfaces. The
 [integration progress note](docs/evaluation-integration-progress.md) records source work.
 
 The [implementation plan](docs/implementation-plan.md) defines shared interfaces,
-checkpoint/result metadata, completion criteria, and remaining Steps 7–9. The
+checkpoint/result metadata, completion criteria, and remaining Steps 8–9. The
 [HPC design](docs/hpc-design.md) preserves OSU `dgxh` execution requirements.
+The [Slurm operating guide](docs/slurm-workflow.md) documents strict separate
+[operational declarations](configs/workflow.yaml), `alpha-sweep-workflow` planning,
+rendering, explicit submission, status/reconciliation/advancement and recovery.
+One shared registry limits both lifecycles to a single bounded wave; immutable
+mapping/intent, exact scheduler IDs and scientific authority remain separate.
+The [Step 7 progress note](docs/step7-progress.md) records source review only.

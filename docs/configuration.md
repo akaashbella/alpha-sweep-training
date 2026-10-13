@@ -1,5 +1,12 @@
 # Configuration, identity, and artifact ownership
 
+Step 7 adds separate operational policy version 1 in `configs/workflow.yaml`,
+validated by hpc_policy.py. It does not alter this scientific schema/fingerprint.
+Resources/environment/shared paths/signals/continuation and reviewed account/QOS
+evidence are archived in immutable work mappings and workflow state. Typed
+execution-only overrides preserve existing run identity; see
+[slurm-workflow.md](slurm-workflow.md) for required future inputs and commands.
+
 ## Schema and current scope
 
 `schema_version: 4` describes the file structure; `scientific.specification_version:

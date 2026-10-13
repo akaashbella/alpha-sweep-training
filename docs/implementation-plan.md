@@ -1,6 +1,6 @@
 # Shared contracts and remaining implementation steps
 
-Steps 1–6 implement configuration, identity, finite atomic serialization,
+Steps 1–7 implement configuration, identity, finite atomic serialization,
 provenance validation, guarded run initialization, full official CIFAR preparation,
 reproducible loaders, all four scratch CIFAR models, owned eligible-weight
 inventory, fixed optimizers, the original-budget scheduler, shared training,
@@ -8,8 +8,9 @@ functional perturbation, clean evaluation, RNG/precision policy, typed metrics
 and numerical failures, restricted durable checkpoints, full continuation,
 coordinated publication/recovery, stop requests, full manifests, one-task execution
 and complete read-only coverage. These sources have not been
-executed or runtime-verified. Slurm/signal orchestration and reporting remain
-future work. Production controller commands are for later HPC use. See
+executed or runtime-verified. Step 7 now adds source-only operational policy,
+bounded Slurm waves, shared workflow authority, signal delivery and allocation
+continuation. Reporting/final integration remain future work. Commands are for later HPC use. See
 [models-and-optimization.md](models-and-optimization.md) and
 [training-and-perturbation.md](training-and-perturbation.md) and
 [checkpoints-and-recovery.md](checkpoints-and-recovery.md) for implemented contracts.
@@ -39,7 +40,7 @@ global clean-only testing while retaining clean validation and the mandatory bas
 | One-task execution | execute_task(manifest, task, base_dir, source_root, operation, overrides, stop) → TaskOutcome/ExitCode through existing engine, lease and continuation plan | 6 implemented |
 | Coverage/provenance | inspect_task/collect_coverage → complete identity join and phase eligibility; collect_provenance → actual future execution source/software/allocation record | 6 implemented |
 | Independent evaluation | EvaluationProtocol/slots/hash seeds; build_test_loader, evaluation-only runtime, evaluate_realization and CleanStateBaseline; verified best binding, independent slot/sweep persistence, execute_evaluation and full logical coverage | approved integration after 6 |
-| Slurm submission | render_submission(manifest, selected tasks, execution policy) → reviewable dgxh submission sources; later submit only in authorized execution workflow | 7 |
+| Slurm workflow | OperationalPolicy/resource_budget, build_work_plan/render_work, WorkflowLease, submit_bundle, SlurmClient, run_allocation/scoped handlers → sealed mappings, durable intents/outcomes and one-shot reconciliation/advancement | 7 implemented, execution deferred |
 | Aggregation | collect_results(manifest) → every individual seed row and explicit completion/failure coverage; validation-selected alpha plus supporting mean/std | 8 |
 | Plotting | plot_results(aggregate) → shareable figures with seed observations visible, uncertainty convention and missing/failure annotations | 8 |
 
@@ -227,7 +228,7 @@ complete three-seed set. Specify cross-seed std convention and how exact
 validation-mean ties are reported before generating final aggregates. Report
 test results for every alpha/seed, not only the selected alpha.
 
-## Steps 2–6 completed in source; remaining steps in order
+## Steps 2–7 completed in source; remaining steps in order
 
 2. **Dataset preparation and reproducibility (implemented, execution deferred).** Official dataset integrity,
    persistent fixed splits, finalized normalization, seeding/augmentation
@@ -255,9 +256,14 @@ versioned seeds, training/evaluation completion, raw durable slots, resumable
 selectors, logical coverage and documented Step 7/8 interfaces. Runtime verification
 remains deferred.
 
-7. **OSU dgxh execution.** One process/GPU per run, configurable allocation
+7. **OSU dgxh execution (implemented in source, execution deferred).** One process/GPU per run, configurable allocation
    policy, persistent shared paths, compatible continuation across allocations,
    global concurrency across training and evaluation, independent evaluation grouping/dependencies/resubmission, and reviewable operational submission sources.
+   Strict versioned operational policy, one unresolved shared wave, sealed work/index/
+   manifest/policy/source/checkpoint linkage, durable pre-sbatch intent, exact scheduler
+   reconciliation, scoped StopRequest delivery, safe bounded continuation, explicit
+   failure/submission/lock recovery and immutable allocation outcomes. See
+   [slurm-workflow.md](slurm-workflow.md). No manifests, bundles or jobs generated.
 8. **Results aggregation and figures.** Seed-first results for every task,
    validation-based alpha selection, transparent supporting mean/std summaries,
    failure/coverage reporting, raw training-alpha × evaluation-alpha analysis retaining seeds and realizations separately, and final figures.
@@ -267,5 +273,6 @@ remains deferred.
 
 Each implementation step ends with source and Git-diff inspection, not executable
 verification. Do not create tests, smoke configs, demonstrations, preliminary
-experiments, or placeholder modules. Step 6 stops before Step 7 Slurm/signal
-orchestration, requeue/resubmission and cluster concurrency control.
+experiments, or placeholder modules. Step 7 stops before Step 8 aggregation and
+plotting. Actual HPC setup, accounting/driver/filesystem validation and runtime
+verification remain authorized work after the complete implementation.

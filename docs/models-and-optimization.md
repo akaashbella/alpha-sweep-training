@@ -229,4 +229,5 @@ Step 5 provides the concrete persistence service, full preflight/restoration and
 durable initial/epoch boundaries. Step 6's
 [controller](manifests-and-controller.md) now connects one selected task using these
 builders, explicit fresh/continuation initialization and actual loader counts.
-Slurm/signals, reporting and HPC runtime checks remain later steps.
+Step 7 now supplies source-only Slurm/signals through
+[slurm-workflow.md](slurm-workflow.md). Reporting and HPC runtime checks remain later work.

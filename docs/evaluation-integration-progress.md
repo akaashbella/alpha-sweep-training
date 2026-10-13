@@ -1,5 +1,9 @@
 # Evaluation integration source progress
 
+Historical post-Step-6 record. Step 7 scheduling/signals/workflow tracking are now
+implemented in source; see [step7-progress.md](step7-progress.md) and
+[slurm-workflow.md](slurm-workflow.md). Runtime verification remains deferred.
+
 Baseline: clean working tree at reviewed Step 6 head
 `95081affb5a2914c18557b5a83ede5d0efa1e739`.
 

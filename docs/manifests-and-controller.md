@@ -4,6 +4,9 @@ Step 6 is implemented in source only. These commands are for authorized future
 HPC use after all nine steps. No commands below have been executed. Runtime
 correctness remains unverified. Slurm submission, signals, retry/requeue,
 resubmission and concurrency orchestration belong to Step 7. The approved independent evaluation integration is documented in [weight-robustness-evaluation.md](weight-robustness-evaluation.md); training and robustness completion have distinct authorities.
+Step 7 is now implemented in source in [slurm-workflow.md](slurm-workflow.md),
+without executing these commands or Slurm operations. The scientific controller
+remains reusable; managed submissions use its shared registry and allocation runner.
 
 ## Finalized inputs
 
@@ -288,7 +291,8 @@ Step 7 owns allocations/submission, resources/account checks, dependencies,
 signal delivery to a per-attempt StopRequest, and continuation across allocations.
 It must retain failure outcomes when publication fails and never infer completion
 from an ended allocation. No part of those job/signal mechanisms is implemented
-here. Step 8 owns seed-first results and aggregation conventions.
+inside this scientific controller. Step 7's separate shared workflow controller
+now implements them in source; Step 8 owns seed-first results and aggregation conventions.
 
 ## Linked independent evaluation
 
@@ -322,3 +326,10 @@ inspection-deferred/reason/error fields and `completion_publication_pending`;
 only verified all-28 sweep authority establishes `robustness_completed`. Unsafe
 lock evidence and genuine publication failures remain errors. No automatic lock
 removal, retries or Step 7 orchestration are introduced.
+
+Step 7's `alpha-sweep-workflow` consumes these contracts through sealed one-task/
+one-checkpoint mappings, a shared wave cap, durable submission intent and exact
+scheduler accounting. `alpha-sweep-allocation` delegates to existing task execution
+with scoped StopRequest handlers. It adds no parallel training/evaluation engine.
+See [slurm-workflow.md](slurm-workflow.md) for explicit operational actions and
+the independent allocation/scientific status join supplied to Step 8.

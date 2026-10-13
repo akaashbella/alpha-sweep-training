@@ -263,6 +263,12 @@ Existing typed execution-only overrides apply; science cannot change through
 execution. StopRequest discard stops between batches/before publication; finish
 completes the current realization and its commit, then stops at the next boundary.
 No signals/handler I/O, retries, jobs, arrays or scheduler dependencies are added.
+The later Step 7 source now provides that operational layer separately, documented
+in [slurm-workflow.md](slurm-workflow.md). Its runner passes StopRequest and an
+immutable `expected_binding` to execute_evaluation; binding equality is repeated
+before computation. One allocation processes one checkpoint's unfinished slots
+sequentially, through the same private streams and completed-slot skip. No scientific
+grid, seed, precision or realization lifetime is changed by scheduling.
 
 Training outcomes now explicitly name `training_completed` and
 `already_training_completed`, with lifecycle="training" and

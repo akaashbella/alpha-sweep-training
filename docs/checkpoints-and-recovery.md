@@ -4,8 +4,11 @@ Step 5 is implemented in source only. No project imports/execution, model
 construction, tests, compilation, linting, training/evaluation, installations,
 downloads, artifact generation, experiments or jobs were performed. Runtime
 correctness remains unverified. Step 6 connects the training launcher and
-[manifest/controller](manifests-and-controller.md). Signal registration, Slurm
-submission, requeue and automatic retry remain unimplemented.
+[manifest/controller](manifests-and-controller.md). This service performs no
+signal registration, Slurm submission or requeue operation.
+Step 7 now supplies explicit submission, scoped signal delivery and bounded safe
+allocation continuation separately in [slurm-workflow.md](slurm-workflow.md).
+This checkpoint service itself registers no signals or submits/requeues jobs.
 The [approved robustness integration](weight-robustness-evaluation.md) updates the
 current lifecycle: journal 2 completes training independently of test; legacy
 journal 1 remains read-only compatible. Independent evaluation never advances

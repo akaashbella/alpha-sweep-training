@@ -17,6 +17,8 @@ dependencies = [
 [project.scripts]
 alpha-sweep-prepare = "alpha_sweep_training.prepare:main"
 alpha-sweep = "alpha_sweep_training.controller:main"
+alpha-sweep-workflow = "alpha_sweep_training.hpc_workflow:main"
+alpha-sweep-allocation = "alpha_sweep_training.allocation_runner:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

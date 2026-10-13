@@ -1,0 +1,49 @@
+# Operational declarations only. Fill shared Linux paths/account/evidence later.
+policy_version: 1
+resources:
+  partition: dgxh
+  account: null
+  qos: null
+  constraint: null
+  nodes: 1
+  gpus: 1
+  cpus: 8
+  memory_gb: 32
+  wall_time: '12:00:00'
+  max_concurrent: 4
+  num_workers: 4
+  native_threads: 4
+paths:
+  checkout: null
+  base_dir: null
+  workflow_root: null
+  slurm_log_root: null
+  evaluation_root: null
+  output_root: null
+  checkpoint_root: null
+  result_root: null
+  log_root: null
+  data_root: null
+  split_file: null
+environment:
+  python_executable: null
+  activation_script: null
+  modules: []
+  variables: {}
+signals:
+  lead_seconds: 600
+  warning_policy: discard_epoch
+  termination_policy: discard_epoch
+continuation:
+  max_allocations_per_work: 20
+  controller_wait_seconds: 120
+commands:
+  sbatch: sbatch
+  squeue: squeue
+  sacct: sacct
+  scontrol: scontrol
+  sacctmgr: sacctmgr
+  timeout_seconds: 30
+# Fill reviewed tighter account/QOS bounds plus an actual inspection report path
+# and SHA-256. Publication limits are implemented in hpc_policy.py, not entitlements.
+effective_limits: null
