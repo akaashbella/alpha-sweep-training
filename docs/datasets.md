@@ -117,10 +117,10 @@ The API returns the caller's effective config on reuse but preserves the origina
 shared YAML. Use that shared YAML as a base for model/task overrides later.
 Preparation resolves only split identity, normalization constants/source, and
 operational data paths. Every unrelated pending decision remains pending.
-Schema-2 saved preparation configurations remain usable: schema 3 migration
-adds fixed model/initialization/scheduler contracts in memory without changing
-stored bytes or manifest checksums. Apply the appropriate model declaration
-after this base. Do not overlay unresolved dataset declarations onto its
+Schema-2/3 saved preparation configurations remain usable: migrations through
+schema 4 add fixed model/initialization/scheduler and training/runtime randomness
+contracts in memory without changing stored bytes or manifest checksums. Apply
+the appropriate model declaration after this base. Do not overlay unresolved dataset declarations onto its
 finalized split/normalization. Changing model selection or operational paths
 does not change preparation identities or rewrite shared files.
 
@@ -256,4 +256,6 @@ for each dataset; exact three training seeds; train drop_last; precision/backend
 policy; scheduler endpoints/cadence. No dataset artifacts were generated in
 Step 2. Step 3's model builders, optimizers and scheduler now exist in source,
 without execution; see [models-and-optimization.md](models-and-optimization.md).
-Training, checkpoint execution and Slurm submission remain later steps.
+Step 4's [shared trainer](training-and-perturbation.md) now consumes these loaders
+and their completed-epoch continuation interface, without changing data streams or
+generating artifacts. Checkpoint persistence/recovery and Slurm remain later steps.

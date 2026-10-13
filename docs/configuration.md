@@ -2,7 +2,7 @@
 
 ## Schema and current scope
 
-`schema_version: 3` describes the file structure; `scientific.specification_version:
+`schema_version: 4` describes the file structure; `scientific.specification_version:
 main-v1` describes the experiment. The effective document has exactly three top
 keys: `schema_version`, `scientific`, `execution`. No arbitrary extra settings,
 unknown names, duplicate YAML keys, non-string mapping keys, YAML merge keys,
@@ -21,8 +21,11 @@ Step 3 adds fixed `model.builder_version`, `model.initialization_version` and
 fields; schema 1 -> 2 -> 3 preserves the earlier data migration. Missing sections
 in partial declarations are filled by central defaults. Explicit incompatible
 versions are rejected; pending values, existing normalization/split values and
-operational paths are preserved. Saved effective YAML now uses schema 3.
-Fingerprint format is version 3, so older run artifacts are incompatible with
+operational paths are preserved. Step 4 adds fixed `training.engine_version =
+functional-fp32-training-v1` and `training.randomness_version =
+sha256-runtime-streams-v1`. Schema 3 -> 4 adds only those contracts; supported
+versions 1/2 chain through earlier migrations. Saved effective YAML now uses
+schema 4. Fingerprint format is version 4, so older run artifacts are incompatible with
 blind continuation/output reuse. This does not invalidate shared prepared data
 or authorize rewriting its original checksummed YAML.
 
@@ -129,6 +132,21 @@ Component-specific errors do not change declaration validity. The implemented
 contracts and continuation call order are in
 [models-and-optimization.md](models-and-optimization.md); no component was executed.
 
+`build_runtime` requires explicit precision/backend fields and a compatible
+assigned CUDA device; no CPU fallback exists. Pinned CUDA matmul precision and
+TF32 must agree: highest/false or high-or-medium/true. Deterministic algorithms
+require CUBLAS_WORKSPACE_CONFIG=:4096:8 or :16:8 set before Python starts.
+Float16 uses pinned native GradScaler defaults; native bfloat16 uses no scaler.
+Train and clean evaluation share the configured forward precision, with float32
+master parameters and float32 cross-entropy/statistics/noise. Effective settings
+are recorded separately from declarations; no pending field is resolved silently.
+
+`RuntimeStreams` requires a selected seed and explicit fresh/restored mode.
+`train_run` additionally requires full research readiness, original-budget
+components, an active `open_run` handle and Step 5's `TrainingPersistence` service.
+The compute and recording interfaces are described in
+[training-and-perturbation.md](training-and-perturbation.md). There is no training CLI.
+
 ## Scientific identity and provenance
 
 Human-readable run IDs have the form
@@ -138,12 +156,12 @@ rounding: 0.10 and 0.1 map to `0.1`, 1 and 1.00 to `1`, and signed zero to `0`.
 All ten approved values remain distinct. Numeric strings are rejected.
 
 `scientific_fingerprint` returns a full SHA-256 hex digest of sorted canonical
-finite JSON containing fingerprint version 3, schema version 3, and the entire
+finite JSON containing fingerprint version 4, schema version 4, and the entire
 effective scientific section. It includes selected seed, the three-seed plan,
 dataset/model, alpha, full training/optimizer/perturbation/evaluation settings,
 split hash, normalization identity/constants, and resolved precision/backend
-policy, including preprocessing/randomness and builder/initialization/scheduler
-versions. Fixed numeric values
+policy, including preprocessing/data randomness, builder/initialization/scheduler
+and training engine/runtime randomness versions. Fixed numeric values
 and alpha are normalized on validation. It excludes
 all execution paths, worker/CPU/RAM requests, allocation wall time, account,
 Slurm IDs, timestamps, and code/software provenance. A version or scientific
@@ -188,6 +206,9 @@ subdirectory—protects the run regardless of `summary.json`.
 
 `open_run(config, base_dir=..., provenance=..., operation=...)` is a context
 manager. All run writers must hold its context for their complete access period.
+The yielded `RunHandle` includes attempt provenance and `require_active(config=None)`;
+its lease is invalidated when the context exits. Training/logging/service use
+must retain this same guarded handle rather than invent a second lock or owner.
 It preflights every selected directory, acquires exclusive cooperative locks at
 each independent storage root, repeats checks under locks, and then initializes
 configuration/metadata. Locks are outside the run directories and contain owner
@@ -231,8 +252,9 @@ manifest expansion, or final result production. Their interfaces are defined in
 ## Prepared dataset configurations
 
 Preparation writes `<data_root>/.alpha_sweep_prepared/<dataset>/dataset_config.yaml`
-with full loader-compatible schema 3 settings for new preparation. Existing
-schema-2 files are migrated in memory on loading and remain unchanged on disk.
+with full loader-compatible schema 4 settings for new preparation. Existing
+schema-2/3 files are checksummed in their original stored bytes, migrated in memory
+on loading and remain unchanged on disk.
 It supplies the actual split
 identity, normalization mean/std, `normalization.source = normalization-v1:sha256:<digest>`,
 and absolute operational data_root/split_file paths. The human constants source

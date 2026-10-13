@@ -1,6 +1,6 @@
 # Main experiment: main-v1
 
-This is the authoritative scientific specification. Schema version 3 and
+This is the authoritative scientific specification. Schema version 4 and
 `src/alpha_sweep_training/spec.py` implement its current configuration contract.
 Changes to the scientific specification require explicit agreement and a
 versioned update; execution resource changes do not.
@@ -30,9 +30,12 @@ For every eligible current clean weight tensor, before every mini-batch:
 - Alpha is one fixed global scalar for the run. Alpha zero bypasses perturbation
   entirely, including noise sampling. Validation and test use clean weights.
 
-Step 4 implements this contract; there is no perturbation/training implementation
-through Step 3. The configuration records the contract rather than selecting a
-particular future autograd implementation.
+Step 4 implements this contract with a functional temporary view connected to
+original float32 parameters and original buffer references. Statistics/noise
+are float32 outside autocast. Configuration records the fixed
+`functional-fp32-training-v1` engine and `sha256-runtime-streams-v1` randomness
+contracts. Their source-only implementation, gradient ownership, alpha-zero
+bypass and precision policy are in [the training guide](training-and-perturbation.md).
 
 ## Approved grid and data
 
@@ -121,6 +124,14 @@ pending. Skipped AMP updates do not advance optimizer-step position. Continuatio
 preserves the original horizon and separate completed-epoch/successful-update
 counts; see the guide for restoration order. None of this source has been run.
 
+Step 4's shared engine observes actual native optimizer calls to distinguish
+float16 GradScaler skips from successful updates. Bfloat16 uses native support
+without a scaler; float32 disables autocast. All modes preserve float32 master
+parameters and use the same configured forward precision for clean evaluation.
+Runtime/model RNGs and private weight-noise RNGs are independent of initialization,
+data streams and alpha; fresh streams seed once, continuation restores them.
+Unresolved precision/backend decisions remain unresolved.
+
 ## Evaluation, reporting, and failures
 
 Save best-validation and final checkpoints. Select best by highest clean
@@ -141,11 +152,20 @@ reason, epoch/step, and the affected metric/tensor where available. JSON numeric
 fields with unavailable or nonfinite results are `null` accompanied by failure
 metadata, never NaN/Infinity tokens, fabricated scores, or successful completion.
 No silent dropping of failed seeds from a supposedly complete three-seed summary.
+Clean layer statistics are recorded after each epoch's updates, before full clean
+validation, including alpha zero. Finite float16 forward/loss with scaler-managed
+gradient overflow records a skipped update; it introduces no skip threshold or
+extra training. Invalid clean state and nonfinite forward/loss are terminal
+numerical failures. Metrics come from the actual training forward and use
+sample-weighted loss, integer correct counts and fraction accuracy.
 
 Latest, best, and final checkpoints have distinct roles. Epoch 200 or the end of
 a Slurm allocation does not complete a run. The full prescribed clean test
 evaluation and final result artifacts are required; see [the checkpoint and
 result contracts](implementation-plan.md).
+Step 4 requires the Step 5 persistence service to commit complete epoch boundaries
+and load persisted best into a separate model for full test. It supplies owned
+in-memory snapshots and typed records, but implements no checkpoint files/recovery.
 
 Quantization, layer-wise perturbation experiments, evaluation-time noise,
 additional datasets, and fine sweeps are outside this main implementation.

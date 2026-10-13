@@ -1,13 +1,15 @@
 # Shared contracts and remaining implementation steps
 
-Steps 1–3 implement configuration, identity, finite atomic serialization,
+Steps 1–4 implement configuration, identity, finite atomic serialization,
 provenance validation, guarded run initialization, full official CIFAR preparation,
 reproducible loaders, all four scratch CIFAR models, owned eligible-weight
-inventory, fixed optimizers and the original-budget scheduler. Dataset and
-Step 3 implementation have not been executed or runtime-verified. Training,
-checkpoint files, controllers, Slurm and reporting remain future interfaces.
-There are no training entry points. See
-[models-and-optimization.md](models-and-optimization.md) for Step 3 contracts.
+inventory, fixed optimizers, the original-budget scheduler, shared training,
+functional perturbation, clean evaluation, RNG/precision policy, typed metrics
+and numerical failures. These sources have not been executed or runtime-verified.
+Checkpoint persistence/recovery, controllers, Slurm and reporting remain future
+work. There is no runnable training command or default persistence service. See
+[models-and-optimization.md](models-and-optimization.md) and
+[training-and-perturbation.md](training-and-perturbation.md) for implemented contracts.
 
 ## Responsibilities and interfaces
 
@@ -18,10 +20,12 @@ There are no training entry points. See
 | Data loading | build_loaders(config, base_dir, pin_memory=False, persistent_workers=False) → DataLoaders with train/validation/test, metadata, set_epoch, continuation_metadata, restore_next_epoch | 2 implemented |
 | Model construction | build_model(config) → scratch CIFAR-adapted model; describe_model(model), discover_eligible_weights(model) → actual metadata/inventory | 3 implemented |
 | Optimizer/scheduler | build_optimizer(model, config), describe_optimizer(optimizer), build_scheduler(optimizer, config, steps_per_epoch, initialize=True) → fixed native recipe and original-budget schedule with in-memory state | 3 implemented |
-| Perturbation | perturbed_training_weights(model, alpha, noise_generator) → exception-safe temporary perturbed view with detached scale/noise and gradients to clean/master parameters | 4 |
-| Clean evaluation | evaluate_clean(model, loader) → full-set loss/accuracy/count with no temporary noise and correct model-mode restoration | 4 |
-| Training | train_run(config, data, model, optimizer, scheduler, run_handle, continuation_state) → epoch records, clean statistics, checkpoint requests, explicit status | 4 |
-| Checkpoint/continuation | save_checkpoint(role, state, run_handle); load_continuation(latest, config, provenance) → compatible full state at safe boundary; distinct clean best/final model loads | 5 |
+| Perturbation | training_forward(model, inputs, *, alpha, noise_generator) → one ordinary/functional forward with detached float32 scale/noise and gradients to original clean parameters | 4 implemented |
+| Runtime/randomness | build_runtime(config) → RuntimePolicy; RuntimeStreams(config, device, initialize=...) → separate model/noise streams and owned in-memory states | 4 implemented |
+| Clean evaluation | evaluate_clean(model, loader, *, split, config, runtime) → full clean ClassificationMetrics and mode restoration | 4 implemented |
+| Training | train_run(config, data, model, optimizer, scheduler, run, *, runtime, streams, persistence, continuation=None) → durably acknowledged TrainingResult or TrainingRunError | 4 implemented; requires Step 5 service |
+| Records | Typed epochs/test/failures/statistics, finite JSON envelopes, epoch/layer CSV renderers and guarded diagnostic JSONL append | 4 implemented |
+| Checkpoint/continuation | Implement TrainingPersistence: commit_epoch, load_best, publish_completion, publish_failure; validate/restore full live state before supplying ContinuationState | 5; protocol implemented in Step 4 |
 | Manifest/task selection | build_manifest(finalized dataset configs, seed plan) → 240 uniquely identified scientific tasks; select_task(manifest, task index/run ID) → one ready RunConfig | 6 |
 | Slurm submission | render_submission(manifest, selected tasks, execution policy) → reviewable dgxh submission sources; later submit only in authorized execution workflow | 7 |
 | Aggregation | collect_results(manifest) → every individual seed row and explicit completion/failure coverage; validation-selected alpha plus supporting mean/std | 8 |
@@ -76,11 +80,20 @@ are written for every epoch. Any regularization inherent in the selected
 architecture remains part of the builder, never silently disabled across runs.
 
 Perturbation and evaluation must agree on clean/master parameter ownership.
-Snapshots and layer statistics must never capture temporary noise. Best
+Owned CPU snapshots and layer statistics never capture temporary noise. Best
 checkpoint selection uses clean validation accuracy and strict `>` improvement.
 No early stopping on poor metrics; a numerical failure is recorded explicitly
 and is never a completed result. AMP scaler state and noise RNG streams belong
 to continuation when the finalized precision policy uses them.
+
+Step 4's `EpochBoundary` contains the complete epoch record, clean statistics,
+owned clean/model/optimizer/scheduler/scaler/RNG/data snapshot and previous commit
+ID. `commit_epoch` must durably publish coordinated state/records before returning
+a validated `CommitReceipt`. Only acknowledgement advances durable progress;
+observed completed epochs in a failure may be greater. CSVs derive from committed
+records and `train.log` is diagnostic only. Unknown transaction outcomes must be
+reconciled by Step 5 before replay. See the training guide for exact typed signatures,
+relative checkpoint references, copy ownership and receipt semantics.
 
 ## Checkpoint roles and required metadata
 
@@ -176,7 +189,7 @@ complete three-seed set. Specify cross-seed std convention and how exact
 validation-mean ties are reported before generating final aggregates. Report
 test results for every alpha/seed, not only the selected alpha.
 
-## Steps 2–3 completed in source; remaining steps in order
+## Steps 2–4 completed in source; remaining steps in order
 
 2. **Dataset preparation and reproducibility (implemented, execution deferred).** Official dataset integrity,
    persistent fixed splits, finalized normalization, seeding/augmentation
@@ -184,9 +197,10 @@ test results for every alpha/seed, not only the selected alpha.
 3. **Four architectures and fixed optimizer recipes (implemented, execution deferred).** Scratch CIFAR builders,
    complete eligible-weight inventory, exact recipe construction, documented
    original-budget warmup/cosine scheduler, and explicit remaining decisions.
-4. **Shared training, perturbation, and clean evaluation.** One engine across
+4. **Shared training, perturbation, and clean evaluation (implemented, execution deferred).** One engine across
    all architectures, fixed-global simultaneous perturbation, clean evaluation,
-   epoch metrics, layer statistics, and numerical failure recording.
+   epoch metrics, layer statistics, numerical failure recording and required
+   persistence protocol with owned snapshots. No checkpoint files/recovery yet.
 5. **Durable checkpoints and continuation.** Atomic latest/best/final states,
    identity/provenance checks, complete RNG/optimizer/scheduler/scaler restoration,
    interruption handling, evaluation-only continuation, and artifact recovery.
@@ -205,4 +219,4 @@ test results for every alpha/seed, not only the selected alpha.
 
 Each implementation step ends with source and Git-diff inspection, not executable
 verification. Do not create tests, smoke configs, demonstrations, preliminary
-experiments, or placeholder modules. Step 3 stops before the Step 4 training engine.
+experiments, or placeholder modules. Step 4 stops before Step 5 persistence/recovery.

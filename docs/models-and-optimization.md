@@ -3,7 +3,9 @@
 Step 3 is implemented in source only. Models and optimizers have not been
 constructed; forwards, parameter counts, scheduler trajectories, and continuation
 have not been executed or runtime-verified. Verification belongs to OSU HPC
-after all nine steps. There is no training or checkpoint-file implementation here.
+after all nine steps. Step 4's shared training is documented in
+[training-and-perturbation.md](training-and-perturbation.md); checkpoint-file
+persistence and recovery remain Step 5.
 
 ## Production interfaces and readiness
 
@@ -18,6 +20,7 @@ after all nine steps. There is no training or checkpoint-file implementation her
 | `scheduler.build_scheduler(optimizer, config, steps_per_epoch, initialize=True)` | `WarmupCosineScheduler`; explicit factor, minimum and cadence required |
 | Scheduler properties / `metadata()` | `interval`, `completed_units`, `total_units`, `warmup_units`, `base_learning_rates`, `current_learning_rates`; serializable metadata |
 | Scheduler `state_dict()`, `validate_state_dict(state)`, `load_state_dict(state)` | In-memory continuation state and compatibility checks; no files |
+| Scheduler `require_binding(optimizer, config, steps_per_epoch)` | Step 4 preflight of exact optimizer ownership, original descriptor and installed rates; no LR mutation |
 
 Construction does not call whole-run research readiness. Models do not require
 datasets, normalization, scheduler decisions, precision policy or Slurm settings.
@@ -207,15 +210,18 @@ cosine minimum and scheduler cadence remain unresolved. Pending component
 settings produce actionable construction errors. Aggregation's standard-deviation
 convention and best-alpha tie policy remain Step 8 decisions.
 
-Schema/fingerprint version 3 records fixed model builder, initialization and
-scheduler fields; schema 1 -> 2 -> 3 and 2 -> 3 migration adds contracts without
-resolving decisions. Existing checksummed schema-2 prepared YAML is migrated in
-memory and is never rewritten. Use prepared dataset_config.yaml as the base,
+Schema/fingerprint version 4 retains fixed model builder, initialization and
+scheduler fields and adds training engine/runtime randomness fields. Explicit
+migrations 1 -> 2 -> 3 -> 4 add contracts without resolving decisions. Existing
+checksummed schema-2/3 prepared YAML is migrated in memory and never rewritten.
+Use prepared dataset_config.yaml as the base,
 then the appropriate model declaration and task overrides. Do not reapply a
 dataset declaration containing null split/normalization over finalized values.
 Operational paths and model selection do not change dataset artifact identities.
 
-Step 4 still owns perturbation, runtime RNG/precision setup, training, clean
-evaluation, metrics and layer statistics. Step 5 owns checkpoint files and full
-restoration. Controllers, submissions, reporting and HPC runtime checks remain
-later steps. No implementation here claims those components already exist.
+Step 4 implements functional perturbation, runtime RNG/precision setup, shared
+training, clean evaluation, metrics, layer statistics and explicit failures.
+It retains the original optimizer/model ownership and scheduling contract above.
+Step 5 must provide its required persistence service and full restoration before
+a training workflow can run. Controllers, submissions, reporting and HPC runtime
+checks remain later steps.
