@@ -7,8 +7,10 @@ versioned update; execution resource changes do not.
 
 ## Research question and perturbation
 
-How does training-time Gaussian weight perturbation strength affect final clean
-classification performance across CNN architectures?
+How does training-time Gaussian weight perturbation strength affect clean
+classification performance and fixed-network weight robustness across CNN architectures?
+The training specification/schema remain main-v1/version 4; the approved independent
+evaluation addition is versioned separately as `weight_robustness_eval_v1`.
 
 For every eligible current clean weight tensor, before every mini-batch:
 
@@ -28,7 +30,8 @@ For every eligible current clean weight tensor, before every mini-batch:
   Temporary noise must never accumulate in stored weights, optimizer state, or
   checkpoints. Restoration must also be safe on exceptions.
 - Alpha is one fixed global scalar for the run. Alpha zero bypasses perturbation
-  entirely, including noise sampling. Validation and test use clean weights.
+  entirely, including noise sampling. Validation uses clean weights. Test uses
+  the mandatory clean baseline and the separate approved robustness sweep.
 
 Step 4 implements this contract with a functional temporary view connected to
 original float32 parameters and original buffer references. Statistics/noise
@@ -136,8 +139,12 @@ Unresolved precision/backend decisions remain unresolved.
 
 Save best-validation and final checkpoints. Select best by highest clean
 validation accuracy; replace it only on strict improvement so exact ties retain
-the earlier epoch. Every alpha and training seed gets full clean test evaluation
-using its own best-validation checkpoint. Choose best alpha using mean
+the earlier epoch. Every training alpha and training seed gets an independent
+best-checkpoint test sweep: evaluation alpha 0 once, and each positive alpha in
+the approved ten-value grid three times (replicates 1–3). Each realization holds
+one complete perturbed network fixed for all 10,000 test images. That is 28 result
+slots/checkpoint, 6,720 total, without multiplying the 240 training tasks.
+Choose best training alpha using mean
 validation accuracy across all three seeds, never test accuracy.
 
 Prominently display each seed's validation and test result. Mean/std are
@@ -159,20 +166,37 @@ extra training. Invalid clean state and nonfinite forward/loss are terminal
 numerical failures. Metrics come from the actual training forward and use
 sample-weighted loss, integer correct counts and fraction accuracy.
 
-Latest, best, and final checkpoints have distinct roles. Epoch 200 or the end of
-a Slurm allocation does not complete a run. The full prescribed clean test
-evaluation and final result artifacts are required; see [the checkpoint and
-result contracts](implementation-plan.md).
-Step 4 requires the Step 5 persistence service to commit complete epoch boundaries
-and load persisted best into a separate model for full test. It supplies owned
-in-memory snapshots and typed records. Step 5 implements restricted clean
-checkpoints, a durable initialized boundary, full continuation and coordinated
-publication/recovery under the existing locks. Storage/journal versions are
-independent of the unchanged scientific fingerprint. See
-[checkpoints-and-recovery.md](checkpoints-and-recovery.md).
+Latest, best and final remain distinct. Training completes after all 200 epochs,
+valid latest/best/final, strict clean validation selection, metrics/statistics and
+durable training summary. It does not require test in that allocation. Independent
+evaluation binds immutable best and has its own guarded result slots and complete
+all-success sweep authority; evaluation failure never invalidates training.
 
-Quantization, layer-wise perturbation experiments, evaluation-time noise,
-additional datasets, and fine sweeps are outside this main implementation.
+For evaluation, use `W_eval = W_clean + evaluation_alpha * population_std(W_clean) * epsilon`.
+Recompute correction=0 population std from each clean best tensor, sample detached
+float32 independent noise once per owned Conv2d/Linear tensor, and retain the same
+temporary values for the entire test pass. Biases/normalization/buffers are not
+perturbed; eval mode uses learned buffers. Alpha zero bypasses noise. Exact owned
+whole-state comparisons protect all parameters/buffers/bindings/prior modes on
+normal and exceptional exits. A failed invariant cannot publish success.
+
+Independent versioned hash seeds bind best generation/digest, protocol version,
+canonical evaluation alpha and replicate; no paths/jobs/workers/order enter them.
+The explicit evaluation precision/backend policy matches the resolved configuration;
+float32 weights/noise/scales/loss are preserved. No optimizer/scheduler/scaler or
+training RNG restoration is required. See the authoritative
+[evaluation contract](weight-robustness-evaluation.md) for exact declaration,
+encoding, preservation, persistence, legacy compatibility and raw schemas.
+
+Frozen schema-4 `scientific.alpha` and legacy run/record alpha names mean training
+alpha only. Frozen evaluation fields describe clean validation/selection and the
+baseline; new protocol identity is separate. Changing evaluation never silently
+changes training fingerprints. Legacy completed clean-test evidence establishes
+training and that historical clean result, not 27 positive results.
+
+Quantization, layer-wise perturbation experiments, additional datasets and fine
+sweeps remain outside scope. The fixed full-network evaluation weight-noise sweep
+is explicitly in scope; image corruptions/adversarial attacks are not added.
 
 ## Development workflow
 

@@ -6,6 +6,10 @@ downloads, artifact generation, experiments or jobs were performed. Runtime
 correctness remains unverified. Step 6 connects the training launcher and
 [manifest/controller](manifests-and-controller.md). Signal registration, Slurm
 submission, requeue and automatic retry remain unimplemented.
+The [approved robustness integration](weight-robustness-evaluation.md) updates the
+current lifecycle: journal 2 completes training independently of test; legacy
+journal 1 remains read-only compatible. Independent evaluation never advances
+this journal or writes latest/best/final/optimizer state.
 
 ## Interfaces and scope
 
@@ -14,21 +18,21 @@ submission, requeue and automatic retry remain unimplemented.
 | `persistence.DurableTrainingPersistence(run)` | Concrete synchronous `TrainingPersistence` service bound to one active run lease |
 | `commit_initial(run, InitialBoundary) -> CommitReceipt` | Durable clean epoch zero after component construction and stream initialization |
 | `commit_epoch(run, EpochBoundary) -> CommitReceipt` | Latest, selected best/final, metrics, statistics and selection in one logical transaction |
-| `load_best(run, model, checkpoint, selection) -> BestLoadReceipt` | Validate/copy persisted best parameters and learned buffers into the separate evaluation model |
-| `publish_completion(run, context, test, final_commit) -> CompletionReceipt` | Full-budget/full-test completion transaction and required summary/artifacts |
+| `publish_training_completion(run, context, final_commit) -> TrainingCompletionReceipt` | Full-budget training completion with immutable training CSVs/summary, no test |
+| `TrainingFinalizationPlan` / `open_run(operation="finalize_training")` | CPU full-budget publication, no live model/optimizer/scheduler/scaler/RNG restoration |
 | `publish_failure(run, context, failure)` | Failure/interruption transaction preserving committed continuation state |
 | `checkpoint_journal.read_committed(paths, config, provenance)` | Read-only stored-state preflight from authoritative HEAD, never inferred logs/CSV counts |
 | `continuation.ContinuationPlan(data=..., model=..., optimizer=..., scheduler=..., runtime=..., streams=...)` | Complete constructed-component preflight, repeated before/under run locks, then ordered restoration |
 | `open_run(..., operation="continue"/"recover", continuation_plan=plan)` | Existing ownership/locks extended with mandatory full preflight before attempt/config writes |
 | `plan.restore(run) -> ContinuationState` | Restore compatible complete latest into original model/optimizer bindings |
-| `recovery.inspect_completion(config, base_dir=..., provenance=...)` | Read-only committed completion or None for missing/incomplete tasks; reject corrupt existing state |
+| `recovery.inspect_training_completion` / legacy name `inspect_completion` | Read-only training completion; legacy clean evidence is explicit, never robustness proof |
 | `service.repair_publication()` | Explicit recover operation: rebuild aliases/CSVs/status and finish safe pruning |
 | `service.reconcile_numerical_failure(reference)` | Explicitly commit a selected compatible terminal numerical-failure evidence record |
 | `recovery.recovery_diagnostics`, `inspect_locks`, `release_confirmed_locks` | Evidence listing and conservative operator-confirmed lock recovery |
 | `interruption.StopRequest.request(policy, reason)` | Request finish_epoch/discard_epoch without serializing inside a handler |
 
-Scientific schema/fingerprint remains 4. Checkpoint and journal format versions
-are independently 1; storage layout does not change scientific identity. No
+Scientific schema/fingerprint remains 4. Checkpoint format remains 1; journal
+version 2 explicitly supports reading legacy 1. Storage layout does not change scientific identity. No
 provisional scientific setting or hardware entitlement is selected by this step.
 
 ## File layout and authority
@@ -57,12 +61,15 @@ SHA-256. `CheckpointReference` is relative to the selected checkpoint root.
   completions/<transaction-id>.summary.json
   completions/<transaction-id>.epochs.csv
   completions/<transaction-id>.layers.csv
+  training_completions/<transaction-id>.summary.json
+  training_completions/<transaction-id>.epochs.csv
+  training_completions/<transaction-id>.layers.csv
   epochs.csv, layer_statistics.csv, summary.json, test.json, failure.json
 <logs>/
   .run_owner.json, train.log
 ```
 
-Every initial/epoch/evaluation/completion/failure transaction has an immutable metadata JSON document with identity, parent
+Every initial/epoch/training-completion/failure transaction has an immutable metadata JSON document with identity, parent
 transaction reference, kind/status, training receipt, counters, best selection,
 complete small record-reference list, artifact references, context/provenance and
 creation time. HEAD names the current transaction and previous transaction.
@@ -77,7 +84,7 @@ content. New directory entries and relevant POSIX directories are fsynced too.
 Publishing CSVs, status, metadata and top-level summary/test aliases is subsequent
 derived work. Separate replacements across roots are **not** one atomic operation.
 A reader follows HEAD and validates its immutable references, including immutable
-completion CSV/test/summary content. It never counts train.log lines, CSV rows,
+training-completion CSV/summary content (or legacy combined CSV/test/summary). It never counts train.log lines, CSV rows,
 filenames, guessed epochs or timestamps to determine progress. An incomplete
 alias publication cannot undo a committed epoch/completion.
 
@@ -87,11 +94,12 @@ Per-epoch CSVs are rebuilt from committed records, with exactly one row per epoc
 and one layer row per eligible tensor per epoch. Replaying unfinished work cannot
 add uncommitted rows or duplicates. Epoch-zero views contain zero rows.
 
-The completion transaction additionally commits immutable complete CSV content.
-Its summary contains effective scientific settings, latest/best/final paths and
-digests, best epoch/correct/count/accuracy, full clean best-checkpoint test, test
-timestamp, metric/statistic content references, committed record references,
-completion reason and attempt history reference. Aliases are convenient views.
+Training completion commits immutable complete CSV content and summary with
+effective science, explicit training alpha, latest/best/final references, strict
+validation selection, full committed records/statistics, time and actual publisher
+provenance separate from training provenance. No test is required in this process.
+Legacy completions retain their recorded clean test/timestamp unchanged. Independent
+evaluation has its own namespace/slot/sweep HEADs and raw schemas in the evaluation guide.
 
 ## Checkpoint format and distinct roles
 
@@ -166,8 +174,8 @@ Then construct the existing clean builder model, move it to the assigned device,
 build native optimizer and scheduler with `initialize=False`, and create runtime
 streams with `initialize=False`. No constructor restores a saved component.
 
-Build a `ContinuationPlan` from those live objects. `open_run` requires this
-concrete plan for continue/recover and performs full preflight before attempt/
+Build a `ContinuationPlan` from those live objects. For unfinished training,
+`open_run` requires this concrete plan for continue/recover and performs full preflight before attempt/
 configuration changes, then repeats it while holding the existing storage-root
 locks. Preflight compares actual constructed model/buffer inventory and component
 versions; optimizer type/recipe/options/order, required state and saved LR;
@@ -176,7 +184,7 @@ data/continuation identities; runtime backend policy and RNG descriptors/states.
 It validates current and necessary previous references and every committed record.
 It mutates no model/optimizer/scheduler/global RNG or run-specific artifact.
 
-Source-snapshot digest and full software mapping must remain compatible. There
+For unfinished training, source-snapshot digest and full software mapping must remain compatible. There
 is no automatic code/software migration. Allocation IDs, operational worker
 settings, storage locations and visible CUDA index can change; they do not enter
 scientific identity. Actual CUDA/native precision support must pass runtime policy
@@ -197,18 +205,22 @@ there is no fresh-state fallback or resuming past a failed restoration.
 `next_epoch_index == completed_epochs`. Replay an unfinished epoch from the last
 committed boundary, including learned buffers, optimizer, schedule, scaler and
 randomness. No mid-batch state or shortened remaining-epoch schedule is introduced.
-At count 200, continuation runs zero additional epochs and follows persisted-best
-full test/publication. Best loads only into the separate evaluation model and
-never changes live latest/final optimizer/scheduler state.
-Verified best loading commits an `evaluating` status transition with the same
-training receipt and checkpoint references; it creates no new tensor checkpoint.
+At count 200, command continuation runs zero epochs and uses publication-only
+TrainingFinalizationPlan; it requires no live training components or test sweep.
+For full-budget publication repair, recover may use the same CPU plan. Historical
+training provenance validates old evidence; the actual publisher is recorded
+separately. This cannot authorize learning under changed code/software.
+Independent best loading copies into its separate evaluation model and advances
+no training journal. Legacy v1 evaluating transitions remain historical only.
 
 ## Completion, failures and stop requests
 
-Completion validates all 200 committed epoch/statistic records; valid durable
-latest/best/final; strict validation best selection; a verified persisted-best
-load; finite clean test metrics and exactly 10,000 examples; and required immutable
-test/summary/CSV content. Epoch 200 alone remains `trained_pending_test`.
+Training completion validates all 200 records/statistics, durable latest/best/final,
+strict clean validation selection and immutable training summary/CSV content.
+Epoch 200 alone is training_pending_completion. Legacy v1 completed additionally
+validates its original full clean test; it establishes no positive-alpha evaluation
+slots. Valid full-budget legacy boundaries are independently evaluation-eligible.
+Robustness completion requires its own 28 successful raw slots and sweep authority.
 `inspect_completion` reads committed completion without constructing a model,
 changing files or acquiring writer locks. Partial/corrupt/incompatible existing
 state raises rather than masquerading as a missing task. Concurrent mutation can
@@ -227,7 +239,7 @@ committed progress, location, reason/type/tensors, transaction outcome and attem
 history. Unavailable loss/accuracy is null. Failed/partial live state is never saved
 as latest. `publish_failure` reads HEAD first: an already committed completion
 dominates a lost acknowledgement or later diagnostic error. Numerical failures
-remain terminal and are rejected by continuation, including valid numerical
+during unfinished training remain terminal and are rejected by continuation, including valid numerical
 failure evidence whose publication did not reach HEAD. Explicit recovery can
 commit a selected compatible orphan numerical record; it cannot resume it as a
 wall-time interruption. If failure storage itself fails, the caller's
@@ -238,7 +250,7 @@ made. Future orchestration must retain that exit classification.
 full boundary and commit before stopping. `discard_epoch` stops at a batch/evaluation
 boundary or before snapshot publication, discarding unfinished live work. Requests
 are checked at committed entry/epoch boundaries, between training/evaluation
-batches, after training batches and before snapshot/test publication. No partial
+batches, after training batches and before snapshot publication. No partial
 epoch gets a completed label. A request arriving during a synchronous commit may
 allow that already-safe transaction to finish; the next check stops further work.
 Caught requests produce `interrupted` and preserve latest. Stop requests register
@@ -258,6 +270,8 @@ current state to a guessed earlier epoch exists.
 For compatible committed publication repair, construct/preflight a plan and use
 `open_run(operation="recover", continuation_plan=plan)`, then
 `DurableTrainingPersistence(run).repair_publication()` inside the context.
+Full-budget repair uses the CPU TrainingFinalizationPlan; unfinished training repair
+retains the full live plan and conservative source/software policy.
 Recovery records an attempt and keeps all ownership/locks; it restores no live
 training components and cannot call the trainer. Continue computes remaining work;
 recover repairs publication; completed inspection only reads; selected overwrite

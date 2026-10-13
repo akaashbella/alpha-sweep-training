@@ -35,6 +35,14 @@ implements strict schema validation, layering, and a separate research-readiness
 gate. `RunConfig.scientific`, `.execution`, and `.to_dict()` return defensive
 copies. Direct `RunConfig(document)` requires the full schema;
 `from_declaration(...)` and `load_config(...)` accept partial declarations.
+The approved independent evaluation protocol is separate from this frozen training
+schema. `RunConfig.training_alpha`/`identity.training_alpha` adapt scientific.alpha;
+it and legacy alpha names always mean training alpha. Existing evaluation fields
+now identify clean validation/selection and the mandatory baseline, preserving
+fingerprint version 4. They do not prohibit weight_robustness_eval_v1. Protocol
+fingerprints include its full fixed grid/replicates/math/lifetime/RNG/checkpoint/
+preprocessing/precision declaration without changing training identity. See
+[weight-robustness-evaluation.md](weight-robustness-evaluation.md).
 
 The schema rejects negative/NaN/infinite alpha and alpha outside the approved
 main grid. It enforces classifier/dataset agreement, scratch initialization,
@@ -140,6 +148,8 @@ Float16 uses pinned native GradScaler defaults; native bfloat16 uses no scaler.
 Train and clean evaluation share the configured forward precision, with float32
 master parameters and float32 cross-entropy/statistics/noise. Effective settings
 are recorded separately from declarations; no pending field is resolved silently.
+Its independent `evaluation_only=True` mode uses the same policy without a
+GradScaler. `build_test_loader` creates only deterministic full-test loading.
 
 `RuntimeStreams` requires a selected seed and explicit fresh/restored mode.
 `train_run` additionally requires full research readiness, original-budget
@@ -230,8 +240,15 @@ these cooperative locks.
 | overwrite | Require an existing selected directory and the exact overwrite_run_id; archive all managed run directories beside their original locations with a unique suffix; initialize a new run |
 
 Continue refuses authoritative HEAD completion and terminal numerical failure.
+New completion means training_completed; legacy completed retains its original
+clean-test meaning and establishes training, never full robustness. Count-200
+dispatch uses publication-only TrainingFinalizationPlan/open_run finalize_training
+without live training components. Stored training provenance validates old evidence;
+actual finalizer provenance is separate. Evaluation reads under its explicit pinned
+component compatibility policy, without requiring new source == training source.
+This exception does not authorize unfinished-training source/software migration.
 Metadata/summary status is a derived view, never the continuation authority.
-Continue/recover requires `ContinuationPlan`, fully checked before attempt/config
+Unfinished continue/recover requires `ContinuationPlan`, fully checked before attempt/config
 writes and again under the existing locks. Missing/incomplete ownership
 or config records do not authorize reuse; stop for recovery or explicitly
 selected archived overwrite. A context exit does not mark a run completed.

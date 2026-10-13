@@ -1,5 +1,10 @@
 # Step 5 implementation progress
 
+Historical Step 5 record. Its combined test/completion semantics are superseded
+by [the approved evaluation integration](weight-robustness-evaluation.md) and
+[current progress](evaluation-integration-progress.md); current training completion
+is independent of test, with CPU count-200 finalization and separate evaluation authority.
+
 Working from clean reviewed Step 4 head e482e704da1a9a4e4c877c5319eb3de34a6fccf0.
 Implementation only; no executable verification or artifact generation.
 

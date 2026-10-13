@@ -1,7 +1,8 @@
 # alpha-sweep-training
 
 Research implementation for how **training-time Gaussian weight perturbation**
-affects final **clean classification performance** across CNN architectures.
+affects clean performance and independently measured fixed-network weight
+robustness across CNN architectures.
 
 Steps 1–6 implement the scientific specification, strict configuration,
 scientific run identity, safe artifact initialization, shared CIFAR preparation,
@@ -11,6 +12,9 @@ shared training, functional weight perturbation, clean evaluation, runtime RNG/
 precision policy, metrics, numerical-failure handling, restricted durable
 checkpoints, complete continuation and coordinated publication/recovery,
 strict full-grid manifests, one-task execution and read-only coverage.
+The approved post-Step-6 integration separates training completion from independent
+`weight_robustness_eval_v1`: one clean and 27 perturbed full-test realizations per
+best checkpoint, 6,720 logical slots across the unchanged 240 training tasks.
 These implementations **have not been executed or runtime-verified**.
 Slurm submission/signal orchestration and reporting remain later steps.
 Production commands are implemented for later authorized HPC use only.
@@ -44,8 +48,9 @@ remain explicit decisions.
 The [training and perturbation guide](docs/training-and-perturbation.md) documents
 clean parameter ownership, temporary noisy forwards, BatchNorm, independent RNGs,
 precision/AMP skips, full clean validation/test, finite records, and the exact
-required Step 5 persistence interfaces. Epoch 200 remains `trained_pending_test`
-until persisted-best test and final artifacts are durably published.
+required persistence interfaces. Epoch 200 remains `training_pending_completion`
+until the training-only summary and required training artifacts are durably
+published. Test evaluation has a separate namespace and completion authority.
 
 The [checkpoint and recovery guide](docs/checkpoints-and-recovery.md) documents
 the concrete persistence service, durable initial boundary, authoritative HEAD,
@@ -58,6 +63,12 @@ layering, exact 240-task identities/two 120-task views, safe one-task dispatch,
 execution provenance, coverage, outcomes and the Step 7 handoff. No manifests
 were generated. Scientific settings in the development declaration remain pending.
 The [Step 6 progress note](docs/step6-progress.md) records source review only.
+The [robustness evaluation guide](docs/weight-robustness-evaluation.md) is the current
+lifecycle/compatibility contract, with `evaluation-plan`, `evaluation-inspect`,
+`evaluate` and `evaluation-status` commands. It documents fixed full-pass noise,
+independent seeds, exact whole-state preservation, resumable slot publication,
+legacy handling and Step 7/8 interfaces. The
+[integration progress note](docs/evaluation-integration-progress.md) records source work.
 
 The [implementation plan](docs/implementation-plan.md) defines shared interfaces,
 checkpoint/result metadata, completion criteria, and remaining Steps 7–9. The

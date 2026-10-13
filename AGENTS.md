@@ -8,6 +8,8 @@ Implemented model/optimizer/scheduler contracts are in [docs/models-and-optimiza
 Implemented training/perturbation/evaluation and Step 5 service contracts are in [docs/training-and-perturbation.md](docs/training-and-perturbation.md).
 Implemented durable checkpoint/continuation/recovery contracts are in [docs/checkpoints-and-recovery.md](docs/checkpoints-and-recovery.md).
 Implemented manifest/controller/provenance/coverage contracts are in [docs/manifests-and-controller.md](docs/manifests-and-controller.md).
+The approved independent evaluation protocol supersedes clean-only testing:
+[docs/weight-robustness-evaluation.md](docs/weight-robustness-evaluation.md).
 
 ## Implementation-only workflow
 
@@ -45,8 +47,9 @@ pointwise, SE, and classifier weights. Do not directly perturb biases,
 normalization parameters, or buffers. Unperturbed parameters learn normally;
 BatchNorm running statistics update normally. Compute gradients at perturbed
 weights and update clean/master weights without accumulated noise. Alpha is one
-fixed global scalar per run; zero bypasses perturbation. Validate and test clean
-weights.
+fixed global training scalar per run; zero bypasses perturbation. Validation is
+clean. Independent best-checkpoint test evaluation includes the clean baseline
+and the approved fixed-network robustness sweep.
 
 The grid is CIFAR-10 first, then CIFAR-100; `resnet50`, `mobilenetv3_large`,
 `efficientnet_b0`, `convnext_tiny`; alpha values
@@ -65,13 +68,17 @@ specification, and native architecture regularization. No poor-performance early
 stopping, MixUp, CutMix, label smoothing, gradient clipping, or EMA.
 
 Save best-validation and final checkpoints. Highest validation accuracy selects
-best; exact ties keep the earlier epoch. Test every alpha/seed's best checkpoint
-with clean weights. Select best alpha using mean validation accuracy across
+best; exact ties keep the earlier epoch. Evaluate every training-alpha/seed best
+checkpoint with evaluation_alpha 0 once and each approved positive alpha three
+times. Hold one realization fixed across each entire 10,000-image test pass.
+Select best training alpha using mean validation accuracy across
 seeds. Prominently preserve individual results; mean/std support them. Record
 epoch metrics, clean layer-weight statistics, and explicit numerical failures.
 
-Quantization, layer-wise perturbation experiments, evaluation-time noise, extra
-datasets, and fine sweeps are outside the main scope. Do not add them implicitly.
+Quantization, layer-wise perturbation experiments, extra datasets and fine sweeps
+remain outside scope. Evaluation-time weight noise is explicitly approved under
+weight_robustness_eval_v1: ten evaluation alphas, clean replicate 0 and positive
+replicates 1–3 (28 slots/checkpoint, 6,720 total). Do not add other perturbations.
 
 ## Shared implementation rules
 
@@ -84,8 +91,10 @@ datasets, and fine sweeps are outside the main scope. Do not add them implicitly
 - New, compatible continuation, explicit publication recovery, read-only completion
   inspection and selected overwrite are different operations. Overwrite archives old directories.
 - Latest checkpoint means continuation; best means validation selection; final
-  means the full training budget. Allocation end/epoch 200 is not completion:
-  prescribed clean test evaluation and final result artifacts are also required.
+  means the full training budget. Training completion requires full-budget
+  checkpoint/selection/metric/statistic authority and its training summary.
+  Robustness completion is separate and requires all 28 successful result slots.
+  An allocation ending never proves either lifecycle complete.
 - Implement only the requested step. Document later interfaces; do not add empty
   modules that imply future functionality already exists.
 - Shared preparation uses its own dataset lock and final manifest, never
@@ -112,8 +121,8 @@ datasets, and fine sweeps are outside the main scope. Do not add them implicitly
 - Runtime model/noise streams exclude alpha and are seeded once or restored;
   artifact callbacks preserve them. Honor explicit CUDA/precision/backend policy.
   Managed float16 AMP skips use observed native optimizer calls, never return values.
-- Step 5 implements TrainingPersistence's commit_initial, commit_epoch, load_best,
-  publish_completion and publish_failure. Owned CPU snapshots are read-only;
+- TrainingPersistence now implements commit_initial, commit_epoch,
+  publish_training_completion and publish_failure. Owned CPU snapshots are read-only;
   acknowledgements mean durable transactions. CSV/logs never determine resume
   position. Load persisted best into a separate evaluation model; never overwrite
   latest with best weights and final optimizer state.
@@ -121,11 +130,14 @@ datasets, and fine sweeps are outside the main scope. Do not add them implicitly
   are validated before HEAD; CSV/status/summary aliases are derived views. Protect
   current/previous references before pruning proven superseded generations.
   Preserve staging, ambiguous evidence, unrelated files and archives.
-- Continue/recover requires full ContinuationPlan preflight before attempt/config
+- Unfinished continue/recover requires full ContinuationPlan preflight before attempt/config
   writes and repeated under existing locks. Numerical failure remains terminal;
   committed completion dominates lost acknowledgement/diagnostic errors.
   Restore original bindings and native optimizer state, scheduler/scaler/data,
   then model/runtime/noise RNG last. Never reseed a recovered initial boundary.
+- Valid count-200 finalization/recovery uses TrainingFinalizationPlan and stored
+  training provenance, with actual publication provenance separate. It cannot
+  authorize another epoch or tensor checkpoint write and requires no test.
 - StopRequest requests finish/discard without signal registration or handler I/O.
   Stale locks require exact ownership evidence and explicit confirmation that all
   recorded owners/allocations are inactive across nodes. Never infer this from
@@ -143,6 +155,19 @@ datasets, and fine sweeps are outside the main scope. Do not add them implicitly
   never infer completion from derived summaries or an allocation ending.
   Source-only Step 6 work stops before Slurm submission, signal registration,
   requeue/resubmission and cluster concurrency orchestration.
+- Keep frozen schema-4 scientific.alpha/run-ID alpha fields as training-only
+  aliases. Evaluation declarations/fingerprints/seeds/namespaces are separate;
+  changing evaluation does not create a different training run. Read legacy v1
+  completion explicitly; it does not prove positive evaluation coverage.
+- Evaluation binds verified full-budget best, preserving all parameters, buffers,
+  bindings and prior modes with exact owned-baseline checks. Positive noise is
+  float32/detached, sampled once per full pass with a checkpoint/protocol/alpha/
+  replicate keyed private generator. Never resample per test batch or restore
+  training RNG/optimizer/scheduler/scaler state for independent evaluation.
+- Evaluation writers hold independent namespace/slot leases, never the training
+  writer lease throughout a pass. Preserve raw slots, failures and orphan evidence;
+  successful slot and sweep HEAD references are authority. No aggregation/plots
+  or actual job orchestration during this integration.
 
 ## HPC constraints
 

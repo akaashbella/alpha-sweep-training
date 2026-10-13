@@ -14,6 +14,10 @@ future work. Production controller commands are for later HPC use. See
 [training-and-perturbation.md](training-and-perturbation.md) and
 [checkpoints-and-recovery.md](checkpoints-and-recovery.md) for implemented contracts.
 Step 6 interfaces are in [manifests-and-controller.md](manifests-and-controller.md).
+The approved integration after Step 6 separates training completion and independent
+weight_robustness_eval_v1; its implemented contracts are in
+[weight-robustness-evaluation.md](weight-robustness-evaluation.md). This supersedes
+global clean-only testing while retaining clean validation and the mandatory baseline.
 
 ## Responsibilities and interfaces
 
@@ -29,11 +33,12 @@ Step 6 interfaces are in [manifests-and-controller.md](manifests-and-controller.
 | Clean evaluation | evaluate_clean(model, loader, *, split, config, runtime) → full clean ClassificationMetrics and mode restoration | 4 implemented |
 | Training | train_run(config, data, model, optimizer, scheduler, run, *, runtime, streams, persistence, continuation=None, stop=None) → durably acknowledged TrainingResult or TrainingRunError | 4–5 implemented |
 | Records | Typed epochs/test/failures/statistics, finite JSON envelopes, epoch/layer CSV renderers and guarded diagnostic JSONL append | 4 implemented |
-| Checkpoint/continuation | DurableTrainingPersistence(run): commit_initial, commit_epoch, load_best, publish_completion, publish_failure; ContinuationPlan preflight/restore → ContinuationState | 5 implemented |
-| Recovery/interruption | inspect_completion, recovery_diagnostics, explicit recover publication/numerical evidence and confirmed lock recovery; StopRequest finish/discard | 5 implemented; signal registration/orchestration later |
+| Checkpoint/continuation | DurableTrainingPersistence(run): commit_initial, commit_epoch, publish_training_completion, publish_failure; ContinuationPlan preflight/restore and CPU TrainingFinalizationPlan → ContinuationState | 5 implemented |
+| Recovery/interruption | inspect_training_completion (legacy inspect_completion adapter), recovery_diagnostics, explicit recover publication/numerical evidence and confirmed lock recovery; StopRequest finish/discard | 5 implemented; signal registration/orchestration later |
 | Manifest/task selection | build_manifest(dataset_configs, model_declarations, seeds, base_dir) → strict 240-task Manifest; load_manifest/load_phase/select_task/task_config → validated Task/config with execution-only overrides | 6 implemented |
 | One-task execution | execute_task(manifest, task, base_dir, source_root, operation, overrides, stop) → TaskOutcome/ExitCode through existing engine, lease and continuation plan | 6 implemented |
 | Coverage/provenance | inspect_task/collect_coverage → complete identity join and phase eligibility; collect_provenance → actual future execution source/software/allocation record | 6 implemented |
+| Independent evaluation | EvaluationProtocol/slots/hash seeds; build_test_loader, evaluation-only runtime, evaluate_realization and CleanStateBaseline; verified best binding, independent slot/sweep persistence, execute_evaluation and full logical coverage | approved integration after 6 |
 | Slurm submission | render_submission(manifest, selected tasks, execution policy) → reviewable dgxh submission sources; later submit only in authorized execution workflow | 7 |
 | Aggregation | collect_results(manifest) → every individual seed row and explicit completion/failure coverage; validation-selected alpha plus supporting mean/std | 8 |
 | Plotting | plot_results(aggregate) → shareable figures with seed observations visible, uncertainty convention and missing/failure annotations | 8 |
@@ -166,36 +171,54 @@ scheduler state handling alone is not full checkpoint compatibility or recovery.
 
 ## Result/status contract and completion
 
-Run status uses an explicit vocabulary: `initialized`, `training`, `interrupted`,
-`trained_pending_test`, `evaluating`, `completed`, `failed_numerical`, or
-`failed_execution`. The Step 1 metadata status is only `initialized`; later
-status/result writers own transitions. Allocation ending may mean interruption
-or failure and is never itself completion.
+Current journal format 2 uses `initialized`, `training`, `interrupted`,
+`training_pending_completion`, `training_completed`, `failed_numerical` and
+`failed_execution`. Explicit legacy journal-1 readers retain `trained_pending_test`,
+`evaluating` and `completed`; the latter proves historical training plus its clean
+test, never the new robustness sweep. Allocation ending and exit code zero do not
+prove either scientific lifecycle complete.
 
-Every epoch/result/status artifact includes result format version, schema and
-fingerprint versions, specification version, run ID, full scientific fingerprint,
-dataset, architecture, canonical alpha, numeric alpha, training seed, split and
-preprocessing identity, and separate code/software provenance. Use finite JSON
-numbers; unavailable failed metrics are null plus status/reason.
+Epoch records retain version-1 legacy `alpha`/`canonical_alpha` fields meaning
+training alpha only. New summaries, evaluation records and selectors explicitly
+name training_alpha and evaluation_alpha, training seed and evaluation replicate.
+Training schema/fingerprint 4 and training manifest 1 remain unchanged. The
+independent protocol fixes the ten evaluation alphas, clean replicate 0 with null
+seed and positive replicates 1-3, formula/inventory/fixed-pass lifetime, seed hash,
+preprocessing, precision and checkpoint policy. Its fingerprint never changes a
+training run's identity.
 
-Required final `results/summary.json` fields include:
+Training completion requires all 200 epochs, verified latest/best/final,
+validation selection, complete epoch metrics/clean-layer statistics and immutable
+training CSVs/summary referenced by the training HEAD. It requires no test.
+Count-200 auto/continue performs CPU training finalization with zero additional
+epochs, no runtime/optimizer/streams. Valid legacy full-budget boundaries are
+independently evaluation-eligible; legacy completion/evidence is not rewritten.
+Unfinished continuation keeps strict source/software and live-state checks.
 
-- Identity/version metadata repeated at the top level, effective scientific
-  settings/reference, status, and completed epoch count.
-- Best checkpoint path/content digest, best validation accuracy and epoch,
-  final checkpoint reference, and latest continuation reference.
-- Clean test evaluation marker, test checkpoint role `best`, test sample count
-  exactly 10,000, clean test loss and accuracy, and evaluation timestamp.
-- Paths/content references for complete epoch metrics and clean layer statistics.
-- Completion/failure reason, failed epoch/step if any, and allocation/attempt
-  history reference. Paths/timestamps are operational, not fingerprint inputs.
+Evaluation independently binds the saved immutable best checkpoint and its actual
+digest using stored training provenance. Actual evaluator provenance is separate.
+`evaluate_realization` constructs one simultaneous float32 fixed functional
+network per complete 10,000-image pass, with exact whole-clean-state preservation
+and a dedicated hash-derived device generator. Zero delegates to the clean
+evaluator with no noise. Test-only loader/runtime require no optimizer, scheduler,
+scaler continuation or training RNG restoration. Failed/partial metrics are null;
+failed preservation prevents success. Training state never changes on eval failure.
 
-`completed` requires all 200 epochs, durable best and final clean checkpoints,
-prescribed clean test evaluation of best on all 10,000 images, required metrics/
-layer statistics, and an atomically written valid final summary. Epoch 200 with
-test evaluation pending is `trained_pending_test`, resumable for evaluation
-without additional training. Step 5 implements this full continuation and
-read-only completion inspection; numerical failure remains terminal.
+Separate owned namespaces and per-slot leases publish immutable digest-validated
+raw records through slot HEADs; SWEEP_HEAD establishes robustness completion only
+after all 28 successful slots. Interrupted passes restart from the same seed;
+completed compatible passes skip. Failures, incompatible/locked observations and
+settled failed sweeps remain explicit. Qualified legacy clean imports preserve
+original references and require immutable full-coverage, preprocessing, precision,
+provenance and exact preservation/runtime evidence; standard old records lacking
+that proof remain historical evidence and need a new clean pass, without retraining.
+
+The training manifest remains 240 tasks/two 120-task views. Linked evaluation
+planning describes 6,720 expected logical passes without fabricating checkpoint
+digests or job counts. Training phase eligibility refers to training completion;
+robustness pending cannot force training again. Exact APIs/commands, raw schemas,
+version/compatibility policies and Step 7/8 consumers are documented in the
+evaluation guide. No test results select checkpoints, alpha or hyperparameters.
 
 Step 8 must join against the complete manifest, prominently retain individual
 seed rows, and report missing/interrupted/numerically failed runs rather than
@@ -219,19 +242,25 @@ test results for every alpha/seed, not only the selected alpha.
 5. **Durable checkpoints and continuation (implemented, execution deferred).** Restricted latest/best/final states,
    identity/provenance checks, complete RNG/optimizer/scheduler/scaler restoration,
    durable initial boundary, coordinated single-point transactions, bounded
-   retention, stop requests, evaluation-only continuation, read-only completion
+   retention, stop requests, CPU training-completion finalization, read-only completion
    inspection and conservative artifact/lock recovery.
 6. **Full experiment controller and manifests (implemented, execution deferred).** Finalized 240-run grid, unique
    per-run configs/identities, one-task selection, coverage/status tracking,
    fixed recipes/decisions across alphas/seeds, and two 120-run linked phase views;
    safe one-task execution, actual provenance collection and strict failure/ownership
    dispatch. No actual manifests generated; scientific inputs remain pending.
+The approved **evaluation integration after Step 6** is implemented in source:
+independent protocol, fixed full-network realizations, exact state preservation,
+versioned seeds, training/evaluation completion, raw durable slots, resumable
+selectors, logical coverage and documented Step 7/8 interfaces. Runtime verification
+remains deferred.
+
 7. **OSU dgxh execution.** One process/GPU per run, configurable allocation
    policy, persistent shared paths, compatible continuation across allocations,
-   global concurrency control, and reviewable operational submission sources.
+   global concurrency across training and evaluation, independent evaluation grouping/dependencies/resubmission, and reviewable operational submission sources.
 8. **Results aggregation and figures.** Seed-first results for every task,
    validation-based alpha selection, transparent supporting mean/std summaries,
-   failure/coverage reporting, and final figures.
+   failure/coverage reporting, raw training-alpha × evaluation-alpha analysis retaining seeds and realizations separately, and final figures.
 9. **Final source integration and operating documentation.** Source-only
    consistency review, dependency/CLI/manifest integration, and complete HPC
    operating instructions. Runtime validation occurs after all nine steps.

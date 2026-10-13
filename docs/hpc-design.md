@@ -36,7 +36,9 @@ run requires explicit compatible continuation and a durable latest checkpoint.
 Maintain the original total budget of 200 epochs, warmup/cosine indexing,
 optimizer/scaler, best-validation record, and RNG states. Do not reset a schedule
 or treat the next allocation as a new research seed. After training, continue
-pending clean test evaluation from the best checkpoint rather than retrain.
+independent evaluation from immutable best rather than retrain. Training command
+count-200 continuation only reconciles training completion; robustness has its
+own allocations/slot resumption and never restores training optimizer/RNG state.
 
 Step 7 must coordinate a **workflow-wide** concurrency limit; independently
 setting both dataset arrays to four tasks could accidentally launch eight.
@@ -45,10 +47,11 @@ CIFAR-10 is processed first, followed by CIFAR-100. Submission/requeue logic mus
 also cooperate with per-storage-root run locks, handle actual allocation limits,
 and leave explicit interrupted/failure status when an allocation stops.
 
-The allocation ending does not mean scientific completion. Completion requires
-the complete training budget, durable best/final checkpoints, clean evaluation
-of each run's best model on the full official test set, epoch/weight statistics,
-and a valid final result summary. Numerical failure must remain visible to
+An allocation ending proves neither lifecycle complete. Training completion
+requires the full budget, valid latest/best/final, clean validation selection,
+epoch/weight statistics and durable training summary. Robustness completion
+requires all 28 successful independent full-test result slots and sweep authority.
+Numerical failure must remain visible to
 controller and aggregation. See [the shared contracts](implementation-plan.md).
 
 Step 5's [checkpoint/recovery APIs](checkpoints-and-recovery.md) are implemented
@@ -62,8 +65,14 @@ Step 6's [manifest/controller guide](manifests-and-controller.md) documents
 `alpha-sweep` commands and `load_manifest`, `load_phase`, `select_task`,
 `inspect_task`, `collect_coverage`, `dispatch`, `execute_task`, TaskOutcome/ExitCode.
 Each task command handles one process/GPU; phase scheduling is a Step 7 responsibility.
+`alpha-sweep evaluate` handles one checkpoint and one or a selected group of
+evaluation slots; 6,720 logical slots do not imply 6,720 jobs. The training grid
+stays 240 tasks/two 120-task phases. `evaluation-plan`, `evaluation-inspect` and
+`evaluation-status` expose linked planning, eligibility and complete coverage.
+See [weight-robustness-evaluation.md](weight-robustness-evaluation.md) for APIs.
 Coverage includes every seed and a conservative phase-2 eligibility flag requiring
-all phase-1 tasks successfully complete. Settled terminal numerical failures remain
+all phase-1 training tasks durably complete. Pending robustness slots do not make
+a checkpoint untrained or force another training allocation. Settled terminal numerical failures remain
 distinct and do not silently unlock the next phase. Automatic candidates exclude
 execution/numerical failures and unsafe inspection conditions.
 
@@ -76,3 +85,6 @@ observations, not an atomic grid snapshot. Retain unsuccessful CLI outcomes when
 failure publication was unavailable. Exit codes and ended allocations alone cannot
 prove completion. No Slurm scripts, signal registration or retry loops are
 implemented; account/resource entitlement checks still belong to future operation.
+Step 7 must enforce workflow-wide concurrency across both training and evaluation,
+choose evaluation job grouping/dependencies, and route StopRequest without handler
+I/O. Training ordering is CIFAR-10 first; evaluation scheduling is a separate policy.

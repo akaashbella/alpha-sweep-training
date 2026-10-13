@@ -8,6 +8,9 @@ Checkpoint persistence/recovery is implemented in Step 5's
 [checkpoint guide](checkpoints-and-recovery.md). The concrete service must be
 supplied explicitly; Step 6's [controller](manifests-and-controller.md) now connects
 one selected task without an implicit persistence bypass.
+The approved [independent robustness integration](weight-robustness-evaluation.md)
+now separates training completion from test. Clean validation and all training
+mathematics below remain unchanged; the former combined clean-test handoff is retired.
 
 ## Interfaces and construction order
 
@@ -17,7 +20,7 @@ one selected task without an implicit persistence bypass.
 | `randomness.RuntimeStreams(config, device, initialize=...)` | Process model RNGs, private noise RNG, owned in-memory states |
 | `perturbation.training_forward(model, inputs, *, alpha, noise_generator)` | Exactly one ordinary or functional training forward |
 | `evaluation.evaluate_clean(model, loader, *, split, config, runtime)` | Full validation/test `ClassificationMetrics` with safe mode restoration |
-| `training.train_run(config, data, model, optimizer, scheduler, run, *, runtime, streams, persistence, continuation=None, stop=None)` | Durable initial boundary, remaining original epochs, selection, commits, persisted-best test and completion |
+| `training.train_run(config, data, model, optimizer, scheduler, run, *, runtime, streams, persistence, continuation=None, stop=None)` | Durable initial boundary, remaining original epochs, validation selection, commits and training-only completion |
 | `metrics` | Typed counters/results/statistics/failures, finite JSON envelopes and CSV rendering, diagnostic log append |
 | `numerical` | Batched finite diagnostics and clean-state guards |
 | `training_contracts` | Owned snapshots, commit/load/completion receipts and required `TrainingPersistence` protocol |
@@ -190,8 +193,10 @@ before/after and cadence. `lr_first_attempt`/`lr_last_attempt` are the rates use
 for those forwards/updates; `lr_at_boundary` is the installed next rate. Duration
 covers training (including any AMP-skip diagnostics), statistics and validation,
 excluding boundary snapshot/commit/log time.
-`TestRecord` contains clean metrics, best reference/selection, final commit ID,
-full budget and evaluation duration. Completion remains pending publication.
+`TestRecord`/CompletionReceipt remain legacy v1 read types. New independent raw
+evaluation records name training_alpha and evaluation_alpha/replicate separately.
+TrainingResult now contains counters, best, final commit and TrainingCompletionReceipt;
+it contains no test result. Legacy training-record alpha fields mean training only.
 
 All records use `RecordContext`: format/schema/specification/fingerprint versions,
 run ID/full fingerprint, dataset/model/numeric and canonical alpha/seed, split/
@@ -200,7 +205,7 @@ normalization/preprocessing identity, attempt and separate provenance.
 
 | Artifact | Format and authority |
 | --- | --- |
-| `logs/train.log` | Append-only finite UTF-8 JSONL envelopes: entry, managed skip, acknowledged epoch, best-test entry, failure. Flushed/fsynced diagnostics; a crash can leave a partial final line. Never a resume counter. |
+| `logs/train.log` | Append-only finite UTF-8 JSONL envelopes: entry, managed skip, acknowledged epoch, failure. Historical best-test entries remain legacy evidence. Flushed/fsynced diagnostics; never a resume counter. |
 | `results/epochs.csv` | `epoch_csv` renders one row per committed epoch with flattened training/validation/totals, fraction/loss units, LR/counters/selection/status; best and skips are JSON cells. |
 | `results/layer_statistics.csv` | `layer_statistics_csv` renders rows by committed epoch and qualified weight name with clean marker, boundary, shape JSON, numel, std/correction zero and identity/provenance columns. |
 
@@ -239,7 +244,7 @@ and any publication/logging error; durability is not claimed if publication fail
 
 ## Exact Step 5 handoff
 
-Step 5 implements the four methods below plus
+The current training service implements the three methods below plus
 `commit_initial(run, InitialBoundary) -> CommitReceipt`. Fresh training requests
 this durable clean initialized boundary before its first batch: zero counters,
 no best/final, initialized RNG state. The receipt remains a fresh-run receipt,
@@ -251,16 +256,11 @@ not a manufactured ContinuationState. A count-zero continuation restores it.
    means synchronous **durable** success, never merely queued work. It carries
    identity, new commit ID, completed count and validated latest/best/final relative
    paths with SHA-256 digests. Preserve earlier best on ties/non-improvement.
-2. `load_best(run, model, checkpoint: CheckpointReference, selection: BestSelection)
-   -> BestLoadReceipt`: verify identity/role/digest/selection and copy all clean
-   parameters and buffers into the trainer's separate evaluation model without
-   replacing bindings. Never silently test final weights. Never change latest or
-   pair best model values with final optimizer state.
-3. `publish_completion(run, context, test: TestRecord, final_commit: CommitReceipt)
-   -> CompletionReceipt`: durably publish the full best-checkpoint test, all required
-   artifacts/references and final valid summary/status; acknowledge identity, final
-   commit and summary digest only when completion is durable. Do not save latest.
-4. `publish_failure(run, context, failure: FailureRecord) -> None`: durably publish
+2. `publish_training_completion(run, context, final_commit) -> TrainingCompletionReceipt`:
+   commit all full-budget checkpoint/selection/record/CSV authority and a training-only
+   summary without test. Independent evaluation reads best and uses its own result
+   namespace, preserving training's final optimizer/latest separately.
+3. `publish_failure(run, context, failure: FailureRecord) -> None`: durably publish
    failure/interruption without saving failed live state, deleting checkpoints or
    destroying evidence of an unknown epoch/completion transaction.
    Reconcile unknown completion first; never downgrade a committed completion
@@ -292,13 +292,15 @@ including its saved RNG/scaler/optimizer/scheduler/buffer state. Step 5 also
 handles the durable initialized boundary and rejects partially initialized
 artifacts without authority; existing files stay protected.
 
-Epoch 200 commits `trained_pending_test`. The separate persisted-best model then
-receives full clean test evaluation; only `publish_completion` can authorize a
-`completed` result. Continuation at count 200 executes no training epochs and takes
-the same test/publication path. Step 5 supplies checkpoint files, restoration,
+Epoch 200 commits `training_pending_completion`; training-only completion follows.
+Count-200 command dispatch uses CPU TrainingFinalizationPlan/publication without
+epochs, loaders, CUDA, optimizer/scheduler/scaler or stream restoration. Legacy
+trained_pending_test/evaluating/completed are handled explicitly as v1 evidence;
+they never imply complete robustness. Step 5 supplies checkpoint files, restoration,
 publication repair, conservative lock recovery and finish/discard stop requests.
 Step 6 connects runnable production task commands in source; Slurm/signal
-orchestration remains Step 7.
+orchestration remains Step 7. Independent evaluation provides its own test loader,
+evaluation-only runtime, fixed whole-pass perturbation and exact whole-state guard.
 
 ## Decisions and versions
 

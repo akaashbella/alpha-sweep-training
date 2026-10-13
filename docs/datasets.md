@@ -23,6 +23,13 @@ deferred to authorized HPC work after all nine implementation steps.
   persistent_workers=False)` returns `DataLoaders` with `train`, `validation`,
   `test`, typed `metadata`, `set_epoch`, `continuation_metadata`, and
   `restore_next_epoch`. Full research readiness remains a later launcher gate.
+- `data.build_test_loader(config, base_dir=...)` returns `TestData(loader, metadata)`
+  for independent robustness evaluation. It validates the same prepared bundle
+  read-only and builds only the deterministic full official 10,000-image test
+  loader, with actual prepared identities. It creates no training view/sampler/
+  iterator and performs no download, split or normalization derivation. Its private
+  worker generator consumes no training model/noise RNG streams. See
+  [weight-robustness-evaluation.md](weight-robustness-evaluation.md).
 
 Dependencies are declared, not installed: PyYAML, torch 2.5.1, torchvision 0.20.1,
 and NumPy 1.26.4, using Python 3.10–3.12. The torch/torchvision pair is documented

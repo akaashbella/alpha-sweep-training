@@ -1,5 +1,10 @@
 # Step 6 source progress
 
+Historical Step 6 record. Its combined test/completion semantics are superseded
+by [the approved evaluation integration](weight-robustness-evaluation.md) and
+[current progress](evaluation-integration-progress.md); the grid remains 240
+training tasks with 6,720 separately planned logical evaluation slots.
+
 Complete in source: strict full-grid manifest and linked phase views, selectors,
 execution-only overrides, metadata-only prepared validation, actual execution
 provenance collector, safe one-task dispatch/construction, library StopRequest

@@ -3,7 +3,7 @@
 Step 6 is implemented in source only. These commands are for authorized future
 HPC use after all nine steps. No commands below have been executed. Runtime
 correctness remains unverified. Slurm submission, signals, retry/requeue,
-resubmission and concurrency orchestration belong to Step 7.
+resubmission and concurrency orchestration belong to Step 7. The approved independent evaluation integration is documented in [weight-robustness-evaluation.md](weight-robustness-evaluation.md); training and robustness completion have distinct authorities.
 
 ## Finalized inputs
 
@@ -55,7 +55,7 @@ The full JSON has exactly `format_version`, `kind="full"`, `grid_version`,
 `grid_id`, `seeds`, `tasks`, `document_sha256`. Each task contains:
 
 - Format/grid linkage, phase, global and phase-local indices.
-- Dataset, architecture, numeric/canonical alpha and selected seed.
+- Dataset, architecture, legacy numeric/canonical alpha (training alpha only) and selected training seed. The manifest format and training fingerprint stay unchanged; RunConfig.training_alpha is the explicit adapter.
 - Existing canonical run ID and full scientific fingerprint.
 - Complete validated effective RunConfig in the existing schema.
 - Split, normalization, preprocessing, preparation and official train/test identities.
@@ -146,9 +146,9 @@ Dispatch uses the following distinctions:
 | --- | --- |
 | All selected run directories absent | New run |
 | Compatible initialized/training/interrupted authority | Full validated continuation |
-| Count 200, test/publication pending | Continuation with zero additional epochs |
-| Valid immutable completed transaction | `already_completed`, no model/runtime/training/test |
-| Committed or unacknowledged numerical evidence | Block, exit 20 |
+| Valid count 200, training publication pending | CPU TrainingFinalizationPlan, zero additional epochs and no test |
+| Valid immutable training completion or legacy completed transaction | `already_training_completed`, no model/runtime/training/test; robustness coverage is separate |
+| Committed or unacknowledged numerical evidence before full training budget | Block, exit 20 |
 | Execution failure or unacknowledged evidence at latest training boundary | Block, exit 21; explicit choice required |
 | Lock, changing read, partial initialization, incompatible/corrupt state or inspection error | Preserve/report, exit 22 |
 
@@ -168,12 +168,15 @@ incompatible content is never silently replaced. Linked/unsafe paths remain
 subject to the original artifact guards. There is no stale-lock release flag in
 this CLI: use the separate Step 5 evidence/confirmed-inactive-owner APIs.
 
-Explicit `recover` is publication repair, never scientific computation. It uses
-the existing mandatory live-component `ContinuationPlan` preflight (therefore
-requires the compatible runtime/data environment and assigned GPU), enters
-`open_run(operation="recover")`, then calls `repair_publication`. It does not
-restore streams or invoke the trainer. For orphan numerical evidence, supply
-`--numerical-reference` as a strict JSON file holding the exact inspected
+Explicit `recover` is publication repair, never scientific computation. A valid
+full-budget boundary uses the CPU `TrainingFinalizationPlan` and stored training
+provenance. Unfinished boundaries retain mandatory live-component
+`ContinuationPlan` preflight and conservative source/software compatibility,
+requiring the compatible runtime/data environment and assigned GPU. Both enter
+`open_run(operation="recover")` and call `repair_publication`, without restoring
+streams or invoking the trainer. Full-budget recovery rejects numerical-reference
+selection for historical test failures. For unfinished orphan numerical evidence,
+supply `--numerical-reference` as a strict JSON file holding the exact inspected
 ArtifactReference, then delegate to `reconcile_numerical_failure` before repair.
 Recovery does not turn a numerical failure into a resumable interruption.
 Malformed derived summaries do not veto HEAD completion or explicit repair;
@@ -198,8 +201,7 @@ and again under existing root locks. Auto dispatch passes
 under those locks if authority changed during construction. Explicit continue
 permits that execution-failure choice. For continue, `plan.restore(run)` restores
 all state with RNG last; the resulting `ContinuationState` goes to the original
-trainer. Epoch zero restores rather than reseeds; count 200 goes directly to
-persisted-best full clean test/publication. No grid training loop exists.
+trainer. Epoch zero restores rather than reseeds. Count 200 uses publication-only CPU finalization before live component construction, and never performs test. Training commands stop after durable training completion. No grid training loop exists.
 
 The library accepts the existing `StopRequest`. It never registers a signal or
 requests retries itself. `TrainingRunError` retains failure/publication details
@@ -211,7 +213,7 @@ the completed outcome with its diagnostic.
 
 | Exit | Run outcome |
 | --- | --- |
-| 0 | Durably completed, already completed, completed after lost ack/diagnostic, or explicitly repaired publication; inspect `outcome` to distinguish repair from scientific completion |
+| 0 | Training completed/already_training_completed, training completion after lost ack/diagnostic, or explicitly repaired publication; inspect outcome and lifecycle, never infer robustness completion |
 | 10 | Interrupted; committed boundary preserved |
 | 20 | Numerical failure or blocked terminal numerical evidence |
 | 21 | Execution failure or blocked execution failure |
@@ -248,8 +250,7 @@ Source/software/allocation remain outside scientific fingerprints.
 `collect_coverage(manifest, base_dir=..., overrides=...)` joins independent
 observations to every expected task, preserving all seeds. It uses saved
 provenance to validate historical state, not an environment/provenance probe.
-Execution dispatch additionally checks compatibility with actual execution
-provenance. Checkpoint validation restricted-loads CPU tensors and records; it
+Unfinished training dispatch additionally checks compatibility with actual execution provenance. Full-budget reading/finalization and independent evaluation validate stored training provenance and record the actual new writer/evaluator separately; evaluation does not require historical training-source equality. Checkpoint validation restricted-loads CPU tensors and records; it
 constructs no model/loader/CUDA runtime. Status never acquires writer locks,
 repairs publications, releases locks, prepares data or writes run state.
 
@@ -261,10 +262,10 @@ reported as corrupt/incompatible/partial with its diagnostic. This is a bounded
 cooperative observation, not an atomic grid snapshot or guarantee against
 noncooperating writers. Reinspect after writers stop.
 
-Counts satisfy expected = completed + failed + unfinished. Failed divides into
+Training counts satisfy expected = training_completed + training_failed + training_unfinished. Failed divides into
 terminal numerical and execution failures; interrupted is a subset of unfinished.
 Inspection conditions contribute to unfinished, never fabricate scientific
-failure. Counts, pending-evaluation flags, committed epoch counts, failure payloads,
+failure. Counts, training_complete, full_budget_committed, training_finalization_pending, evaluation_eligible, legacy_clean_test, committed epoch counts, failure payloads,
 evidence references and locks accompany every individual identity. Dataset,
 architecture and dataset/architecture breakdowns remain coverage only; no result
 means/std, alpha selection or plots are computed.
@@ -273,10 +274,10 @@ means/std, alpha selection or plots are computed.
 
 Use `load_manifest`, `load_phase`, `select_task`, `task_config`, `inspect_task`,
 `dispatch`, `execute_task`, typed `TaskOutcome`/`ExitCode` and `collect_coverage`.
-Phase coverage exposes success, terminal scientific-failure count, settled
+Phase coverage explicitly exposes training_successfully_completed, training_eligible, terminal scientific-failure count, settled
 completed-or-numerical coverage, eligibility and automatic candidate run IDs.
 Phase 1 is eligible first; phase 2's conservative eligibility requires every
-phase-1 task successfully completed. Terminal failure is visible and does not
+phase-1 training task durably training-completed. Pending robustness does not block training phase eligibility. Terminal failure is visible and does not
 imply phase success or silently unlock phase 2. Later orchestration must define
 any explicitly approved alternate terminal-failure policy. The one-task executor
 does not enforce cluster phase scheduling; Step 7 consumes eligibility, refreshes
@@ -288,3 +289,28 @@ signal delivery to a per-attempt StopRequest, and continuation across allocation
 It must retain failure outcomes when publication fails and never infer completion
 from an ended allocation. No part of those job/signal mechanisms is implemented
 here. Step 8 owns seed-first results and aggregation conventions.
+
+## Linked independent evaluation
+
+`evaluation_plan(manifest)` keeps the parent at 240 training tasks and links 28
+logical evaluation slots per task, 6,720 total. It records protocol contracts and
+logical indices, not guessed checkpoint digests or scheduler jobs. Actual result
+bindings are created only from a verified full-budget best checkpoint. Both
+training alpha/seed and evaluation alpha/replicate remain explicit.
+
+The controller adds `evaluation-plan`, `evaluation-inspect`, `evaluate` and
+`evaluation-status`. Inspection/execution reuse the existing task selectors and
+typed execution-only overrides. Evaluation selectors choose one slot or a group;
+omitting them runs all missing slots. Completed compatible slots are validated
+and skipped. Each interrupted pass restarts from its deterministic seed, discards
+partial metrics and preserves raw failure evidence. Explicit `--retry-failed`
+authorizes failed-slot retries; qualified `--reuse-legacy-clean` retains original
+legacy references/provenance and never fabricates preservation evidence.
+
+Independent namespace/slot locks and HEAD/SWEEP_HEAD authorities never change
+training state. `collect_experiment_coverage` joins every training identity and
+all logical evaluation slots, including unbound pending slots for untrained tasks.
+Reports expose clean/positive success, pending/failed/interrupted/locked/
+incompatible conditions and complete robustness authority separately from
+training completion. See the evaluation guide for exact APIs, commands, versions,
+raw schemas and Step 7/8 handoffs. No jobs, signals, means/std or plots are added.
