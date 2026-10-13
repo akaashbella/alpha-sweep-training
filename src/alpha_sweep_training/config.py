@@ -303,6 +303,11 @@ class RunConfig:
     def execution(self) -> dict:
         return deepcopy(self._document["execution"])
 
+    @property
+    def training_alpha(self) -> float:
+        """Explicit adapter for frozen schema-4 scientific.alpha (training only)."""
+        return self._document["scientific"]["alpha"]
+
     def to_dict(self) -> dict:
         return deepcopy(self._document)
 

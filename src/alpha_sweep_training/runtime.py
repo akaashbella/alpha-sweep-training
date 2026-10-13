@@ -33,6 +33,7 @@ class RuntimePolicy:
     effective_backend: dict
     device_metadata: dict
     scaler: torch.amp.GradScaler | None
+    evaluation_only: bool = False
 
     def autocast(self) -> ContextManager:
         mode = self.precision["mode"]
@@ -44,7 +45,10 @@ class RuntimePolicy:
             raise ComponentError("Runtime precision differs from RunConfig")
         if torch.cuda.current_device() != self.device.index or _backend_settings() != self.effective_backend:
             raise ComponentError("Assigned CUDA device or precision/backend settings changed during this run")
-        if self.precision["mode"] == "amp_float16":
+        if self.evaluation_only:
+            if self.scaler is not None:
+                raise ComponentError("Independent evaluation must not construct a training scaler")
+        elif self.precision["mode"] == "amp_float16":
             if self.scaler is None or not self.scaler.is_enabled():
                 raise ComponentError("amp_float16 requires the enabled pinned CUDA GradScaler")
             state = self.scaler.state_dict()
@@ -85,13 +89,15 @@ class RuntimePolicy:
         return images.to(self.device, non_blocking=True), labels.to(self.device, non_blocking=True)
 
 
-def build_runtime(config: RunConfig) -> RuntimePolicy:
+def build_runtime(config: RunConfig, *, evaluation_only: bool = False) -> RuntimePolicy:
     """Apply a resolved policy once in the owning training process, at runtime.
 
     This does not seed RNGs, construct models, select a precision default, or
     fall back to CPU. Build/move the model before building its optimizer.
     """
     config = require_config(config, "CUDA runtime")
+    if type(evaluation_only) is not bool:
+        raise ComponentError("evaluation_only must be bool")
     precision = config.scientific["precision"]
     pending = [f"scientific.precision.{key}" for key, value in precision.items() if value is None]
     if pending:
@@ -143,11 +149,11 @@ def build_runtime(config: RunConfig) -> RuntimePolicy:
             raise ComponentError(f"Runtime could not honor precision.{key}")
     if effective["allow_tf32_matmul"] != precision["allow_tf32"] or effective["allow_tf32_cudnn"] != precision["allow_tf32"]:
         raise ComponentError("Runtime could not honor the declared TF32 policy")
-    scaler = torch.amp.GradScaler("cuda") if precision["mode"] == "amp_float16" else None
+    scaler = torch.amp.GradScaler("cuda") if precision["mode"] == "amp_float16" and not evaluation_only else None
     runtime = RuntimePolicy(device, precision, effective,
                             {"name": properties.name, "capability": [properties.major, properties.minor],
                              "total_memory_bytes": properties.total_memory, "wheel_architectures": arches,
                              "torch": str(torch.__version__), "cuda": torch.version.cuda,
-                             "cudnn": torch.backends.cudnn.version()}, scaler)
+                             "cudnn": torch.backends.cudnn.version()}, scaler, evaluation_only)
     runtime.require_active(config)
     return runtime

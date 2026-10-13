@@ -11,6 +11,17 @@ from .spec import ALPHAS
 from .weights import discover_eligible_weights, named_parameters_once
 
 
+def gaussian_weight_offset(shape, *, strength, clean_population_std, generator, device):
+    """Shared float32 detached noise mathematics; callers own scale/lifetime.
+
+    Training computes all current scales each mini-batch; evaluation computes
+    clean-checkpoint scales once per fixed realization. No global RNG calls.
+    """
+    with torch.no_grad(), torch.autocast(device_type="cuda", enabled=False):
+        epsilon = torch.randn(shape, generator=generator, dtype=torch.float32, device=device)
+        return epsilon.mul(strength * clean_population_std).detach()
+
+
 def training_forward(model: nn.Module, inputs: torch.Tensor, *, alpha: float,
                      noise_generator: torch.Generator) -> torch.Tensor:
     """Exactly one forward. Autocast belongs to the caller's precision policy.
@@ -49,10 +60,8 @@ def training_forward(model: nn.Module, inputs: torch.Tensor, *, alpha: float,
                                for entry in eligible)
                 require_finite(scales, "perturbation_scale")
             for entry, (_, scale) in zip(eligible, scales):
-                with torch.no_grad():
-                    epsilon = torch.randn(entry.shape, generator=noise_generator,
-                                          dtype=torch.float32, device=device)
-                    offset = epsilon.mul(alpha * scale).detach()
+                offset = gaussian_weight_offset(entry.shape, strength=alpha, clean_population_std=scale,
+                                                generator=noise_generator, device=device)
                 # Keep this addition tracked: d temporary / d clean = identity.
                 parameters[entry.name] = entry.parameter + offset
             require_finite(((entry.name, parameters[entry.name]) for entry in eligible),

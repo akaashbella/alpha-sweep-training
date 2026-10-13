@@ -353,3 +353,26 @@ def save_manifest_document(path, document: dict, *, parent: Manifest, replace: b
     finally:
         lock.unlink()
         fsync_directory(lock.parent)
+
+
+def evaluation_plan(manifest):
+    """Logical slots, no fabricated checkpoint digests or scheduler job grouping."""
+    from .evaluation_protocol import evaluation_protocol, prescribed_slots
+    from .spec import TOTAL_EVALUATION_SLOTS, EVALUATION_SLOTS_PER_CHECKPOINT, EVALUATION_PROTOCOL_VERSION
+    manifest = manifest_from_dict(manifest.to_dict())
+    rows = []
+    for task in manifest.tasks:
+        protocol = evaluation_protocol(task.config)
+        rows.append({"training_global_index": task.global_index, "training_phase": task.phase,
+            "training_run_id": task.run_id, "training_scientific_fingerprint": task.fingerprint,
+            "training_alpha": task.config.scientific["alpha"], "training_seed": task.config.scientific["training_seed"],
+            "evaluation_protocol": protocol.to_dict(), "evaluation_protocol_fingerprint": protocol.fingerprint,
+            "checkpoint_binding": "bind_verified_best_when_full_training_budget_available",
+            "slots": [{"logical_evaluation_index": task.global_index * EVALUATION_SLOTS_PER_CHECKPOINT + index,
+                       **slot.to_dict()} for index, slot in enumerate(prescribed_slots())]})
+    return {"evaluation_plan_version": 1, "parent_grid_id": manifest.grid_id,
+        "parent_document_sha256": manifest.document_sha256, "protocol_version": EVALUATION_PROTOCOL_VERSION,
+        "training_tasks": len(manifest.tasks), "logical_evaluation_slots": TOTAL_EVALUATION_SLOTS,
+        "job_grouping": "Step 7; logical slots are not job counts", "tasks": rows}
+
+

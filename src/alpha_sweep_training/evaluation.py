@@ -1,4 +1,4 @@
-"""Full clean validation/test using learned parameters and learned buffers."""
+"""Shared full-set evaluation with clean or fixed functional weights."""
 
 import torch
 from torch import nn
@@ -39,6 +39,11 @@ def classification_loss(logits: torch.Tensor, labels: torch.Tensor, num_classes:
 def evaluate_clean(model: nn.Module, loader: DataLoader, *, split: str,
                    config: RunConfig, runtime: RuntimePolicy, stop: StopRequest | None = None) -> ClassificationMetrics:
     """Evaluate one full deterministic split; never accepts a noise generator."""
+    return _evaluate_split(model, loader, split=split, config=config, runtime=runtime, stop=stop, forward=model)
+
+
+def _evaluate_split(model, loader, *, split, config, runtime, stop, forward):
+    """Shared full-set metrics/precision loop; forward lifetime belongs to caller."""
     if split not in ("validation", "test"):
         raise ComponentError("Clean evaluator supports only full validation or official test")
     expected = VALIDATION_SIZE if split == "validation" else TEST_SIZE
@@ -65,7 +70,7 @@ def evaluate_clean(model: nn.Module, loader: DataLoader, *, split: str,
                     stop.check(at_boundary=False, phase=f"clean_{split}_batch")
                 images, labels = runtime.batch(batch, info.num_classes)
                 with runtime.autocast():
-                    logits = model(images)
+                    logits = forward(images)
                 loss = classification_loss(logits, labels, info.num_classes)
                 accumulator.add(loss, logits, labels)
                 if accumulator.examples > expected:
@@ -81,3 +86,56 @@ def evaluate_clean(model: nn.Module, loader: DataLoader, *, split: str,
         # Assign flags individually, preserving mixed prior submodule modes.
         for module, training in modes:
             module.training = training
+
+
+def evaluate_realization(model, loader, *, config, runtime, slot, seed, baseline, stop=None):
+    """One fixed temporary full network across the entire official test pass.
+
+    Alpha zero delegates to the ordinary clean evaluator and never constructs
+    a perturbation generator. No training/noise RNG state is consumed/restored.
+    """
+    from torch.func import functional_call
+    from .evaluation_protocol import EvaluationSlot
+    from .weights import discover_eligible_weights, named_parameters_once
+    from .evaluation_state import CleanStatePreservationError
+    from .perturbation import gaussian_weight_offset
+    if not isinstance(slot, EvaluationSlot):
+        raise ComponentError("Evaluation requires a prescribed EvaluationSlot")
+    if not runtime.evaluation_only or baseline.model is not model:
+        raise ComponentError("Use evaluation-only runtime and this model's owned clean baseline")
+    with baseline.realization():
+        runtime.require_active(config)
+        require_clean_model(model, runtime.device, stage="robustness_realization_entry")
+        if slot.evaluation_alpha == 0:
+            if seed is not None:
+                raise ComponentError("Clean baseline has no perturbation seed")
+            return evaluate_clean(model, loader, split="test", config=config, runtime=runtime, stop=stop)
+        if type(seed) is not int or not 0 <= seed < 2**64:
+            raise ComponentError("Positive realization requires its derived uint64 seed")
+        generator = torch.Generator(device=runtime.device).manual_seed(seed)
+        parameters = dict(named_parameters_once(model))
+        # Private learned-buffer copies also protect originals during a failing forward.
+        buffers = {name: value.detach().clone() for name, value in model.named_buffers()}
+        buffer_baseline = {name: value.detach().to("cpu", copy=True) for name, value in buffers.items()}
+        try:
+            with torch.inference_mode(), torch.autocast(device_type="cuda", enabled=False):
+                eligible = discover_eligible_weights(model)
+                if not eligible:
+                    raise ComponentError("Approved evaluation model has no owned eligible weights")
+                scales = tuple(torch.std(entry.parameter.detach(), correction=0) for entry in eligible)
+                require_finite(((entry.name, scale) for entry, scale in zip(eligible, scales)), "evaluation_scales")
+                for entry, scale in zip(eligible, scales):
+                    offset = gaussian_weight_offset(entry.shape, strength=slot.evaluation_alpha,
+                        clean_population_std=scale, generator=generator, device=runtime.device)
+                    parameters[entry.name] = entry.parameter.detach() + offset
+                require_finite(((entry.name, parameters[entry.name]) for entry in eligible), "evaluation_fixed_weights")
+            def forward(images):
+                return functional_call(model, (parameters, buffers), (images,), strict=True, tie_weights=True)
+            result = _evaluate_split(model, loader, split="test", config=config, runtime=runtime, stop=stop, forward=forward)
+            if any(not torch.equal(value.detach().cpu(), buffer_baseline[name]) for name, value in buffers.items()):
+                raise CleanStatePreservationError("Fixed evaluation forward changed learned normalization buffers")
+            return result
+        finally:
+            parameters.clear()
+            buffers.clear()
+            buffer_baseline.clear()

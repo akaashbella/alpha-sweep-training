@@ -255,6 +255,8 @@ def validate_checkpoint(payload: dict, config: RunConfig, provenance: dict, *, r
 def write_checkpoint(run: RunHandle, snapshot: TrainingSnapshot, role: str, generation: str,
                      artifact_state: dict) -> CheckpointReference:
     run.require_active()
+    if run.operation not in ("new", "continue", "overwrite"):
+        fail("Publication-only finalization cannot write latest/best/final tensors")
     payload = make_checkpoint(snapshot, run, role, generation, artifact_state)
     validate_checkpoint(payload, run.config, run.provenance, role=role, completed_epochs=snapshot.counters.completed_epochs)
     relative = f"generations/{generation}.{role}.pt"

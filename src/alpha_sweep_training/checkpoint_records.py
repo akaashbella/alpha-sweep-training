@@ -69,7 +69,11 @@ def validate_epoch(record: EpochRecord, statistics: tuple[LayerStatistic, ...], 
     completed = previous.completed_epochs + 1
     same(record.epoch_index, previous.completed_epochs, "record epoch index")
     same(record.completed_epochs, completed, "record completed count")
-    same(record.status, "trained_pending_test" if completed == EPOCHS else "training", "epoch status")
+    if completed == EPOCHS:
+        if record.status not in ("trained_pending_test", "training_pending_completion"):
+            fail("Full-budget epoch requires a recognized legacy/new pending-completion status")
+    else:
+        same(record.status, "training", "epoch status")
     same(record.training_kind, "clean_training" if config.scientific["alpha"] == 0 else "perturbed_training", "training metric kind")
     record.totals.validate(complete_boundary=True)
     for name in ("attempted_batches", "successful_updates", "skipped_updates"):

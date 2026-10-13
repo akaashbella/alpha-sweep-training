@@ -59,3 +59,13 @@ def identity_metadata(config: RunConfig) -> dict:
         "run_id": run_identity(config),
         "scientific_fingerprint": scientific_fingerprint(config),
     }
+
+
+def training_alpha(config: RunConfig) -> float:
+    """Explicit adapter: schema-4 scientific.alpha always means TRAINING alpha.
+
+    The historical evaluation block describes clean validation/checkpoint
+    selection and the mandatory clean baseline, not the independent sweep.
+    Preserve its bytes and fingerprint version 4; protocol identity is separate.
+    """
+    return config.scientific["alpha"]

@@ -11,13 +11,12 @@ from pathlib import PurePosixPath
 from typing import Any, Literal, Protocol, runtime_checkable
 
 import torch
-from torch import nn
 
 from .artifacts import RunHandle
 from .component_contracts import ComponentError, integer_count
 from .config import RunConfig
 from .identity import identity_metadata
-from .metrics import BestSelection, Counters, EpochRecord, FailureRecord, LayerStatistic, RecordContext, TestRecord
+from .metrics import BestSelection, Counters, EpochRecord, FailureRecord, LayerStatistic, RecordContext
 from .spec import EPOCHS
 
 
@@ -154,6 +153,7 @@ class BestLoadReceipt:
 
 @dataclass(frozen=True)
 class CompletionReceipt:
+    """Legacy v1 combined training + clean test receipt; never robustness proof."""
     identity: dict
     final_commit_id: str
     summary_sha256: str
@@ -163,6 +163,21 @@ class CompletionReceipt:
         if (self.identity != identity_metadata(config) or self.final_commit_id != final_commit.commit_id
                 or self.status != "completed" or final_commit.completed_epochs != EPOCHS):
             raise PersistenceContractError("Completion must acknowledge the final committed run and its clean best-checkpoint test")
+        _digest(self.summary_sha256)
+
+
+@dataclass(frozen=True)
+class TrainingCompletionReceipt:
+    identity: dict
+    final_commit_id: str
+    summary_sha256: str
+    status: Literal["training_completed"] = "training_completed"
+
+    def validate(self, config: RunConfig, final_commit: CommitReceipt) -> None:
+        if (self.identity != identity_metadata(config) or self.final_commit_id != final_commit.commit_id
+                or self.status != "training_completed" or final_commit.completed_epochs != EPOCHS
+                or final_commit.best is None or final_commit.final is None):
+            raise PersistenceContractError("Training completion requires the full budget and best/final/latest authority")
         _digest(self.summary_sha256)
 
 
@@ -186,24 +201,15 @@ class TrainingPersistence(Protocol):
         Snapshot tensors already own CPU storage and contain no temporary noise.
         Publish derived results/epochs.csv and results/layer_statistics.csv from
         committed records using metrics.py renderers, with no duplicate rows on
-        recovery. At epoch 200 acknowledge trained_pending_test, not completion.
+        recovery. At epoch 200 acknowledge training_pending_completion; the
+        training-only completion transaction follows independently of test.
         """
         ...
 
-    def load_best(self, run: RunHandle, model: nn.Module,
-                  checkpoint: CheckpointReference, selection: BestSelection) -> BestLoadReceipt:
-        """Validate identity/role/digest/selection and load all clean parameters
-        AND buffers into the separate evaluation model, preserving bindings.
-        Never load optimizer/scheduler or replace latest during this operation.
-        """
-        ...
-
-    def publish_completion(self, run: RunHandle, context: RecordContext, test: TestRecord,
-                           final_commit: CommitReceipt) -> CompletionReceipt:
-        """Commit full clean 10,000-example best test, checkpoint references,
-        required epoch/statistic artifacts, and final summary/status atomically
-        under Step 5's coordinated publication/recovery policy. Return only once
-        all established completion criteria are durable. Do not save latest here.
+    def publish_training_completion(self, run: RunHandle, context: RecordContext,
+                                    final_commit: CommitReceipt) -> TrainingCompletionReceipt:
+        """Commit full-budget training/checkpoint/metric authority, without test.
+        Evaluation has an independent namespace and completion authority.
         """
         ...
 
@@ -219,4 +225,4 @@ class TrainingPersistence(Protocol):
 
 def require_persistence(service: TrainingPersistence) -> None:
     if not isinstance(service, TrainingPersistence):
-        raise ComponentError("Training requires TrainingPersistence implementing commit_initial, commit_epoch, load_best, publish_completion and publish_failure")
+        raise ComponentError("Training requires commit_initial, commit_epoch, publish_training_completion and publish_failure")

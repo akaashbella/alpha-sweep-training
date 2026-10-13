@@ -10,7 +10,7 @@ from .checkpoint_journal import HEAD_PATH, read_committed
 from .identity import identity_metadata
 from .provenance import software_provenance
 from .serialization import atomic_write_json, read_json
-from .training_contracts import CommitReceipt, CompletionReceipt
+from .training_contracts import CommitReceipt, CompletionReceipt, TrainingCompletionReceipt
 
 
 def _provenance(value: dict) -> dict:
@@ -20,13 +20,18 @@ def _provenance(value: dict) -> dict:
 @dataclass(frozen=True)
 class CompletionInspection:
     receipt: CommitReceipt
-    completion: CompletionReceipt
+    completion: CompletionReceipt | TrainingCompletionReceipt
     summary: dict
     transaction: ArtifactReference
+    lifecycle: str = "training"
+
+    @property
+    def legacy_clean_test(self) -> bool:
+        return isinstance(self.completion, CompletionReceipt)
 
 
 def inspect_completion(config, *, base_dir, provenance) -> CompletionInspection | None:
-    """Read authoritative completion without model construction, locks or writes.
+    """Read TRAINING completion (including legacy clean evidence), never robustness.
 
     Missing tasks return None. Existing partial/corrupt/incompatible runs raise;
     a stale/missing derived summary never authorizes recomputation or replacement.
@@ -40,13 +45,19 @@ def inspect_completion(config, *, base_dir, provenance) -> CompletionInspection 
         return None
     _check_existing(paths, config, "recover", current_provenance)
     current = read_committed(paths, config, current_provenance)
-    if current.status != "completed":
+    if current.status not in ("completed", "training_completed"):
         return None
     from .checkpoint_io import read_document
     reference = ArtifactReference.from_dict(current.document["artifacts"]["completion"]["summary"])
     summary = read_document(paths, reference)
-    return CompletionInspection(current.receipt, CompletionReceipt(identity_metadata(config),
+    receipt_type = CompletionReceipt if current.status == "completed" else TrainingCompletionReceipt
+    return CompletionInspection(current.receipt, receipt_type(identity_metadata(config),
         current.receipt.commit_id, reference.sha256), summary, current.reference)
+
+
+def inspect_training_completion(config, *, base_dir, provenance):
+    """Explicit lifecycle adapter for the legacy-named inspect_completion API."""
+    return inspect_completion(config, base_dir=base_dir, provenance=provenance)
 
 
 @dataclass(frozen=True)

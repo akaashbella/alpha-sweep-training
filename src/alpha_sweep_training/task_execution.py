@@ -10,7 +10,7 @@ from .manifests import Manifest, Task, ManifestError, _same, manifest_from_dict,
 
 
 class ExitCode(IntEnum):
-    COMPLETED = 0
+    TRAINING_COMPLETED = 0
     INTERRUPTED = 10
     NUMERICAL_FAILURE = 20
     EXECUTION_FAILURE = 21
@@ -29,6 +29,7 @@ class TaskOutcome:
     diagnostic: str | None = None
     failure: dict | None = None
     failure_published: bool | None = None
+    lifecycle: str = "training"
 
     def to_dict(self):
         return asdict(self)
@@ -52,10 +53,12 @@ def dispatch(observation: TaskObservation, *, operation: str = "auto") -> str:
         raise RunDirectoryError(f"Task inspection rejected {observation.condition}: {observation.diagnostic}")
     if operation == "recover":
         return "recover"
-    if observation.stored_status == "completed":
+    if observation.training_complete:
         if operation in ("auto", "continue"):
-            return "already_completed"
+            return "already_training_completed"
         raise RunDirectoryError("Task is already complete; new cannot replace it")
+    if observation.full_budget_committed and operation in ("auto", "continue"):
+        return "finalize_training"
     if observation.terminal_numerical:
         return "blocked_numerical"
     if operation == "new":
@@ -107,10 +110,30 @@ def execute_task(manifest: Manifest, task: Task, *, base_dir, source_root, overr
         # Stored-state preflight occurs before loaders/model/runtime construction.
         observation = inspect_task(selected, base_dir=base_dir, overrides=overrides, provenance=provenance)
         selected_operation = dispatch(observation, operation=operation)
-        if selected_operation == "already_completed":
-            return TaskOutcome(**common, outcome="already_completed", exit_code=ExitCode.COMPLETED,
+        if selected_operation == "already_training_completed":
+            return TaskOutcome(**common, outcome="already_training_completed", exit_code=ExitCode.TRAINING_COMPLETED,
                                operation=selected_operation, observation=observation,
                                completed_epochs=observation.completed_epochs)
+        if selected_operation == "finalize_training" or (selected_operation == "recover" and observation.full_budget_committed):
+            if numerical_reference is not None:
+                raise ManifestError("Full-budget publication recovery does not reconcile historical test failures; omit --numerical-reference")
+            from .continuation import TrainingFinalizationPlan
+            from .persistence import DurableTrainingPersistence
+            from .metrics import RecordContext
+            plan = TrainingFinalizationPlan()
+            stage = "ownership_preflight"
+            with open_run(config, base_dir=base_dir, provenance=provenance,
+                          operation=selected_operation, continuation_plan=plan) as run:
+                if selected_operation == "recover":
+                    DurableTrainingPersistence(run).repair_publication()
+                    return TaskOutcome(**common, outcome="training_publication_repaired", exit_code=ExitCode.TRAINING_COMPLETED,
+                        operation="recover", observation=observation, completed_epochs=observation.completed_epochs)
+                completion = DurableTrainingPersistence(run).publish_training_completion(
+                    run, RecordContext(plan.current.document["context"]), plan.current.receipt)
+                completion.validate(config, plan.current.receipt)
+                acknowledged_completion = plan.current.receipt.completed_epochs
+                return TaskOutcome(**common, outcome="training_completed", exit_code=ExitCode.TRAINING_COMPLETED,
+                    operation="finalize_training", completed_epochs=acknowledged_completion)
         if selected_operation in ("blocked_numerical", "blocked_execution"):
             numeric = selected_operation == "blocked_numerical"
             return TaskOutcome(**common, outcome=selected_operation,
@@ -160,7 +183,7 @@ def execute_task(manifest: Manifest, task: Task, *, base_dir, source_root, overr
                     from .checkpoint_io import ArtifactReference
                     service.reconcile_numerical_failure(ArtifactReference.from_dict(numerical_reference))
                 service.repair_publication()
-                return TaskOutcome(**common, outcome="publication_repaired", exit_code=ExitCode.COMPLETED,
+                return TaskOutcome(**common, outcome="publication_repaired", exit_code=ExitCode.TRAINING_COMPLETED,
                     operation=selected_operation, observation=observation,
                     completed_epochs=observation.completed_epochs,
                     diagnostic="Publication repaired; stored scientific status is unchanged unless numerical evidence was explicitly reconciled")
@@ -180,9 +203,9 @@ def execute_task(manifest: Manifest, task: Task, *, base_dir, source_root, overr
                 try:
                     current = read_committed(run.paths, run.config, run.provenance)
                     count = current.receipt.completed_epochs
-                    if current.status == "completed":
+                    if current.status in ("completed", "training_completed"):
                         acknowledged_completion = count
-                        return TaskOutcome(**common, outcome="completed_after_lost_ack", exit_code=ExitCode.COMPLETED,
+                        return TaskOutcome(**common, outcome="training_completed_after_lost_ack", exit_code=ExitCode.TRAINING_COMPLETED,
                             operation=selected_operation, completed_epochs=count,
                             diagnostic=str(exc), failure=asdict(exc.failure), failure_published=exc.failure_published)
                 except Exception as inspection_error:
@@ -193,24 +216,24 @@ def execute_task(manifest: Manifest, task: Task, *, base_dir, source_root, overr
                     completed_epochs=count, diagnostic=str(exc) + (reconciliation or ""),
                     failure=asdict(exc.failure), failure_published=exc.failure_published)
             acknowledged_completion = result.counters.completed_epochs
-            return TaskOutcome(**common, outcome="completed", exit_code=ExitCode.COMPLETED,
+            return TaskOutcome(**common, outcome="training_completed", exit_code=ExitCode.TRAINING_COMPLETED,
                 operation=selected_operation, completed_epochs=result.counters.completed_epochs)
     except Exception as exc:
         # Construction/preflight/restoration/lease-exit errors must never produce
         # a fresh fallback. Report the condition even when no failure could be
         # durably published because there was no valid initialized boundary.
         if acknowledged_completion is not None:
-            return TaskOutcome(**common, outcome="completed_after_diagnostic_error", exit_code=ExitCode.COMPLETED,
+            return TaskOutcome(**common, outcome="training_completed_after_diagnostic_error", exit_code=ExitCode.TRAINING_COMPLETED,
                 operation=selected_operation, completed_epochs=acknowledged_completion,
                 diagnostic=f"Committed completion; subsequent {type(exc).__name__}: {exc}")
-        if stage in ("ownership_preflight", "restoration") and selected_operation == "continue":
+        if stage in ("ownership_preflight", "restoration") and selected_operation in ("continue", "finalize_training"):
             # Another cooperating writer may have committed completion/failure
             # while components were being constructed. The plan repeats all
             # gates under locks; a stable reinspection classifies that rejection.
             refreshed = inspect_task(selected, base_dir=base_dir, overrides=overrides, provenance=provenance)
             if refreshed.condition == "ok":
-                if refreshed.stored_status == "completed":
-                    return TaskOutcome(**common, outcome="already_completed", exit_code=ExitCode.COMPLETED,
+                if refreshed.training_complete:
+                    return TaskOutcome(**common, outcome="already_training_completed", exit_code=ExitCode.TRAINING_COMPLETED,
                         operation=selected_operation, observation=refreshed,
                         completed_epochs=refreshed.completed_epochs, diagnostic=str(exc))
                 if refreshed.terminal_numerical or (refreshed.execution_failed and operation == "auto"):

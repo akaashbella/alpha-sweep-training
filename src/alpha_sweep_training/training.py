@@ -14,13 +14,12 @@ from .component_contracts import ComponentError
 from .config import RunConfig
 from .data import DataLoaders, TrainingView
 from .evaluation import EvaluationFailure, classification_loss, evaluate_clean
-from .identity import identity_metadata
 from .interruption import StopRequest, TrainingInterrupted
 from .metrics import (
     AmpSkip, BestSelection, Counters, EpochRecord, FailureRecord, MetricAccumulator,
-    RecordContext, TestRecord, append_train_log, clean_layer_statistics,
+    RecordContext, append_train_log, clean_layer_statistics,
 )
-from .models import build_model, describe_model
+from .models import describe_model
 from .numerical import NumericalFailure, gradient_nonfinite_names, require_clean_model, require_finite_optimizer
 from .optimizers import describe_optimizer, validate_optimizer
 from .perturbation import training_forward
@@ -29,7 +28,7 @@ from .runtime import RuntimePolicy
 from .scheduler import WarmupCosineScheduler
 from .spec import BATCH_SIZE, EPOCHS, TEST_SIZE, TRAIN_SIZE, VALIDATION_SIZE
 from .training_contracts import (
-    BestLoadReceipt, CommitReceipt, CompletionReceipt, ContinuationState, EpochBoundary, InitialBoundary,
+    CommitReceipt, TrainingCompletionReceipt, ContinuationState, EpochBoundary, InitialBoundary,
     PersistenceContractError, TrainingPersistence, TrainingSnapshot, owned_cpu_snapshot, require_persistence,
 )
 
@@ -49,9 +48,8 @@ class TrainingResult:
     status: str
     counters: Counters
     best: BestSelection
-    test: TestRecord
     final_commit: CommitReceipt
-    completion: CompletionReceipt
+    completion: TrainingCompletionReceipt
 
 
 def _validate_data(data: DataLoaders, config: RunConfig) -> None:
@@ -160,17 +158,19 @@ def train_run(config: RunConfig, data: DataLoaders, model: nn.Module, optimizer:
               scheduler: WarmupCosineScheduler, run: RunHandle, *, runtime: RuntimePolicy,
               streams: RuntimeStreams, persistence: TrainingPersistence,
               continuation: ContinuationState | None = None, stop: StopRequest | None = None) -> TrainingResult:
-    """Train remaining original epochs, then require persisted-best full test.
+    """Train remaining original epochs and durably complete TRAINING only.
 
     Step 6's controller supplies the concrete persistence service explicitly.
     ContinuationPlan restores all live components before passing ContinuationState.
-    Returning success requires durable epoch/final/test/summary acknowledgements.
+    Independent evaluation consumes best after this lifecycle; no test here.
     """
     require_persistence(persistence)  # Fail before computation if the service is absent.
     config.require_research_ready()
     run.require_active(config)
-    if run.operation == "recover":
+    if run.operation in ("recover", "finalize_training"):
         raise ComponentError("Recovery repairs publication; use explicit continuation to compute")
+    if runtime.evaluation_only:
+        raise ComponentError("Training requires the training runtime/scaler policy, not evaluation_only")
     if stop is not None and not isinstance(stop, StopRequest):
         raise ComponentError("stop must be a StopRequest")
     if continuation is not None and not isinstance(continuation, ContinuationState):
@@ -230,7 +230,7 @@ def train_run(config: RunConfig, data: DataLoaders, model: nn.Module, optimizer:
         phase = "training_entry"
         with streams.preserve():
             append_train_log(run, context, "training_entry", {
-                "status": "trained_pending_test" if durable_epochs == EPOCHS else "training",
+                "status": "training_pending_completion" if durable_epochs == EPOCHS else "training",
                 "durable_completed_epochs": durable_epochs, "runtime": runtime.metadata(),
                 "randomness": streams.metadata(), "counters": asdict(counters)})
         if stop is not None:
@@ -317,7 +317,7 @@ def train_run(config: RunConfig, data: DataLoaders, model: nn.Module, optimizer:
                 counters.skipped_updates - before.skipped_updates, counters,
                 first_lr, last_lr, scheduler.current_learning_rates[0], scheduler_before,
                 scheduler.completed_units, scheduler.interval, time.perf_counter() - started,
-                selected, best, tuple(skips), "trained_pending_test" if counters.completed_epochs == EPOCHS else "training")
+                selected, best, tuple(skips), "training_pending_completion" if counters.completed_epochs == EPOCHS else "training")
             phase = "epoch_snapshot"
             if stop is not None:
                 stop.check(at_boundary=False, phase=phase)
@@ -344,49 +344,18 @@ def train_run(config: RunConfig, data: DataLoaders, model: nn.Module, optimizer:
                 phase = "committed_epoch_boundary"
                 stop.check(at_boundary=True, phase=phase)
 
-        # A separate evaluation model prevents best weights from ever being paired
-        # with final optimizer state in the live continuation model or latest.
-        phase, epoch_index, batch_index = "load_persisted_best", None, None
-        if last_commit is None or best is None or last_commit.best is None:
-            raise PersistenceContractError("Full-budget clean test requires a durable final boundary and persisted best")
+        phase, epoch_index, batch_index = "training_completion_commit", None, None
+        if last_commit is None or best is None:
+            raise PersistenceContractError("Training completion requires its durable final boundary and validation selection")
         last_commit.validate(config, counters, best)
-        with streams.preserve():
-            append_train_log(run, context, "best_test_entry", {
-                "status": "evaluating", "durable_completed_epochs": durable_epochs,
-                "final_commit_id": last_commit.commit_id,
-                "best_checkpoint": asdict(last_commit.best), "best": asdict(best)})
-            evaluation_model = build_model(config).to(device=runtime.device, dtype=torch.float32)
-            original_parameters = dict(evaluation_model.named_parameters())
-            original_buffers = dict(evaluation_model.named_buffers())
-            run.require_active()
-            loaded = persistence.load_best(run, evaluation_model, last_commit.best, best)
-            if (not isinstance(loaded, BestLoadReceipt) or loaded.identity != identity_metadata(config)
-                    or loaded.checkpoint != last_commit.best):
-                raise PersistenceContractError("load_best did not acknowledge the persisted validation-selected checkpoint")
-            current = dict(evaluation_model.named_parameters())
-            buffers = dict(evaluation_model.named_buffers())
-            if (set(current) != set(original_parameters) or any(current[name] is not p for name, p in original_parameters.items())
-                    or set(buffers) != set(original_buffers) or any(buffers[name] is not b for name, b in original_buffers.items())):
-                raise PersistenceContractError("Best loading must copy clean values into existing parameter/buffer bindings")
-        phase = "clean_test"
-        runtime.require_active(config)
-        started = time.perf_counter()
-        test_metrics = evaluate_clean(evaluation_model, data.test, split="test", config=config, runtime=runtime, stop=stop)
-        test = TestRecord(test_metrics, best, asdict(last_commit.best), last_commit.commit_id,
-                          time.perf_counter() - started)
-        del evaluation_model, original_parameters, original_buffers, current, buffers
-        if stop is not None:
-            phase = "clean_test_finished_before_publication"
-            stop.check(at_boundary=True, phase=phase)
-        phase, commit_outcome = "completion_commit", "unknown_until_acknowledged"
+        commit_outcome = "unknown_until_acknowledged"
         with streams.preserve():
             run.require_active()
-            completion = persistence.publish_completion(run, context, test, last_commit)
-            if not isinstance(completion, CompletionReceipt):
-                raise PersistenceContractError("publish_completion must return a durable CompletionReceipt")
+            completion = persistence.publish_training_completion(run, context, last_commit)
+            if not isinstance(completion, TrainingCompletionReceipt):
+                raise PersistenceContractError("Training-only completion requires a durable TrainingCompletionReceipt")
             completion.validate(config, last_commit)
-        # No further fallible logging after this durable completion acknowledgement.
-        return TrainingResult("completed", counters, best, test, last_commit, completion)
+        return TrainingResult("training_completed", counters, best, last_commit, completion)
     except BaseException as exc:
         # Avoid CUDA or foreign optimizer calls while handling an execution
         # failure: gradients never belong to a checkpoint or failure record.

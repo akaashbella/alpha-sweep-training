@@ -294,3 +294,31 @@ def build_loaders(config: RunConfig, *, base_dir: str | Path,
         data_rng_software={"torch": str(torch.__version__)},
     )
     return DataLoaders(train, validation, test, metadata, sampler, worker_generator)
+
+
+@dataclass(frozen=True)
+class TestData:
+    loader: DataLoader
+    metadata: dict
+
+
+def build_test_loader(config: RunConfig, *, base_dir: str | Path) -> TestData:
+    """Read-only full test, without training views/sampler/iterators or RNG restore."""
+    prepared = load_prepared_dataset(config, base_dir=base_dir)
+    science, workers = config.scientific, config.execution["num_workers"]
+    normalization = prepared.normalization
+    view = EvaluationView(prepared.sources.test, range(TEST_SIZE), normalization["mean"], normalization["std"])
+    # A private loader generator only seeds incidental workers; samples are deterministic.
+    generator = _generator(_data_seed("test_workers", science["dataset"], prepared.split["identity"],
+                                      require_seed(science["training_seed"], "training checkpoint seed"), 0))
+    loader = DataLoader(view, batch_size=BATCH_SIZE, shuffle=False, drop_last=False, num_workers=workers,
+                        generator=generator, worker_init_fn=_initialize_worker, pin_memory=False,
+                        persistent_workers=False, prefetch_factor=2 if workers else None)
+    return TestData(loader, {"dataset": science["dataset"], "num_classes": DATASETS[science["dataset"]],
+        "split_identity": prepared.split["identity"], "normalization_identity": normalization["identity"],
+        "preprocessing_identity": prepared.manifest["preprocessing_identity"],
+        "preparation_identity": prepared.manifest["identity"],
+        "official_training_identity": prepared.sources.training_record["identity"],
+        "official_test_identity": prepared.sources.test_record["identity"],
+        "test_examples": TEST_SIZE, "test_batches": len(loader), "batch_size": BATCH_SIZE,
+        "num_workers": workers, "torch": str(torch.__version__)})

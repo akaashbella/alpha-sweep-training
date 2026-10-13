@@ -45,7 +45,7 @@ class ContinuationPlan:
         if self._restored:
             fail("Do not reuse a restored continuation plan")
         current = read_committed(paths, config, provenance)
-        if not recovery and current.status == "completed":
+        if not recovery and current.status in ("completed", "training_completed"):
             fail("Task is already durably completed; use read-only inspect_completion or explicit publication recovery")
         if not recovery and current.status == "failed_numerical":
             fail("Numerical failure is terminal; do not automatically continue/retry it")
@@ -124,3 +124,32 @@ class ContinuationPlan:
         self.streams.load_state_dict(decode_rng(state["rng"]))
         self._restored = True
         return ContinuationState(counters, best, current.receipt, deepcopy(state["data_continuation"]))
+
+
+class TrainingFinalizationPlan:
+    """Publication only at count 200; no live model/optimizer/RNG restoration.
+
+    Historical provenance validates historical tensors/records. Current writer
+    provenance is recorded separately by open_run and the completion summary.
+    This exception never authorizes another training epoch or checkpoint write.
+    """
+    def __init__(self):
+        self.training_provenance = None
+        self.current = None
+
+    def preflight(self, paths, config, provenance, **_unused):
+        from .artifacts import _check_existing, _require_plain_file
+        from .serialization import read_json
+        from .provenance import software_provenance
+        from .spec import EPOCHS
+        path = paths.metadata / "run_metadata.json"
+        _require_plain_file(path)
+        stored = read_json(path)["provenance"]
+        software_provenance(code=stored["code"], software=stored["software"], allocation=stored.get("allocation"))
+        _check_existing(paths, config, "finalize_training", stored)
+        current = read_committed(paths, config, stored)
+        if current.receipt.completed_epochs != EPOCHS:
+            fail("Publication-only finalization cannot restore/continue unfinished training")
+        self.training_provenance = deepcopy(stored)
+        self.current = current
+        return current

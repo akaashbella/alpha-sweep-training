@@ -13,7 +13,13 @@ from .serialization import read_json
 from .training_contracts import CheckpointReference, CommitReceipt
 
 HEAD_PATH = "state/HEAD.json"
-_STATUSES = {"initialized", "training", "interrupted", "trained_pending_test", "evaluating", "completed", "failed_numerical", "failed_execution"}
+_STATUSES = {"initialized", "training", "interrupted", "trained_pending_test", "evaluating", "completed",
+             "training_pending_completion", "training_completed", "failed_numerical", "failed_execution"}
+
+
+def journal_version(value):
+    if type(value) is not int or value not in (1, TRANSACTION_VERSION):
+        fail("Unsupported training journal version; supported: legacy 1 and lifecycle 2")
 
 
 def receipt_from_dict(value: dict) -> CommitReceipt:
@@ -28,14 +34,18 @@ def transaction(paths: RunPaths, ref: ArtifactReference, config, provenance) -> 
         fail("Transaction must reside in the metadata journal")
     value = exact(read_document(paths, ref), {"format_version", "identity", "transaction_id", "parent", "kind", "status",
         "receipt", "counters", "best", "records", "artifacts", "context", "provenance", "created_at_utc"}, "transaction")
-    same(value["format_version"], TRANSACTION_VERSION, "transaction format")
+    journal_version(value["format_version"])
     same(value["identity"], identity_metadata(config), "transaction identity")
     if ref.relative_path != f"state/transactions/{value['transaction_id']}.json":
         fail("Transaction filename/ID mismatch")
     if type(value["transaction_id"]) is not str or len(value["transaction_id"]) != 32 or any(c not in "0123456789abcdef" for c in value["transaction_id"]):
         fail("Invalid immutable transaction ID")
-    if value["kind"] not in ("initial", "epoch", "evaluation", "completion", "failure") or value["status"] not in _STATUSES:
+    if value["kind"] not in ("initial", "epoch", "evaluation", "completion", "training_completion", "failure") or value["status"] not in _STATUSES:
         fail("Unknown transaction kind/status")
+    if value["format_version"] == 1 and (value["kind"] == "training_completion" or value["status"] in ("training_completed", "training_pending_completion")):
+        fail("Legacy journal cannot claim the new training-only lifecycle")
+    if value["format_version"] == 2 and (value["kind"] in ("evaluation", "completion") or value["status"] in ("completed", "evaluating", "trained_pending_test")):
+        fail("Journal v2 separates training from independent evaluation")
     compatible_provenance(value["provenance"], provenance)
     validate_context(value["context"], config, provenance)
     counters = Counters(**exact(value["counters"], set(asdict(Counters())), "transaction counters"))
@@ -49,7 +59,8 @@ def transaction(paths: RunPaths, ref: ArtifactReference, config, provenance) -> 
     if value["kind"] in ("initial", "epoch"):
         same(value["receipt"]["commit_id"], value["transaction_id"], "training transaction ID")
     if value["kind"] == "epoch":
-        same(value["status"], "trained_pending_test" if counters.completed_epochs == EPOCHS else "training", "epoch transaction status")
+        pending = "trained_pending_test" if value["format_version"] == 1 else "training_pending_completion"
+        same(value["status"], pending if counters.completed_epochs == EPOCHS else "training", "epoch transaction status")
         if counters.completed_epochs == 0:
             fail("An epoch transaction cannot be epoch zero")
     if value["kind"] == "failure" and value["status"] not in ("interrupted", "failed_numerical", "failed_execution"):
@@ -78,10 +89,11 @@ def read_committed(paths: RunPaths, config, provenance, *, verify_previous: bool
     if not path.is_file():
         fail("No durable initial boundary: preserve this partially initialized run; explicit recovery/archived overwrite is required")
     head = exact(read_json(path), {"format_version", "identity", "current", "previous"}, "HEAD")
-    same(head["format_version"], TRANSACTION_VERSION, "HEAD format")
+    journal_version(head["format_version"])
     same(head["identity"], identity_metadata(config), "HEAD identity")
     ref = ArtifactReference.from_dict(head["current"])
     document = transaction(paths, ref, config, provenance)
+    same(head["format_version"], document["format_version"], "HEAD/current transaction version")
     same(document["parent"], head["previous"], "HEAD previous generation")
     result = validate_committed_document(paths, head, ref, document, config, provenance)
     if verify_previous and head["previous"] is not None:
@@ -135,11 +147,15 @@ def validate_committed_document(paths, head, ref, document, config, provenance) 
     same(asdict(previous), asdict(counters), "committed record counters")
     same(None if previous_best is None else asdict(previous_best), document["best"], "validation-selected best")
     artifacts = exact(document["artifacts"], {"completion", "failure"}, "transaction artifacts")
-    if document["status"] == "completed":
+    if document["status"] == "training_completed":
+        if counters.completed_epochs != EPOCHS or document["kind"] != "training_completion" or artifacts["completion"] is None:
+            fail("Invalid training-only completion transaction")
+        validate_training_completion(paths, document, receipt, config, provenance, tuple(records))
+    elif document["status"] == "completed":
         if counters.completed_epochs != EPOCHS or document["kind"] != "completion" or artifacts["completion"] is None:
             fail("Invalid completion transaction")
         validate_completion(paths, document, receipt, config, provenance, tuple(records))
-    elif artifacts["completion"] is not None or document["kind"] == "completion":
+    elif artifacts["completion"] is not None or document["kind"] in ("completion", "training_completion"):
         fail("Completion artifact/status mismatch")
     if artifacts["failure"] is not None:
         failure = read_document(paths, ArtifactReference.from_dict(artifacts["failure"]))
@@ -152,6 +168,50 @@ def validate_committed_document(paths, head, ref, document, config, provenance) 
     elif document["kind"] == "failure":
         fail("Missing durable failure record")
     return CommittedState(head, ref, document, receipt, latest, tuple(records))
+
+
+def validate_training_completion(paths, document, receipt, config, provenance, records):
+    """No test fields: validate all immutable training artifacts and selection."""
+    refs = exact(document["artifacts"]["completion"], {"summary"}, "training completion references")
+    summary_ref = ArtifactReference.from_dict(refs["summary"])
+    if summary_ref.root != "results" or not summary_ref.relative_path.startswith("training_completions/"):
+        fail("Training completion summary must be immutable in training_completions")
+    summary = read_document(paths, summary_ref)
+    expected_keys = set(document["context"]) | {"training_completion_version", "status", "completed_epochs",
+        "scientific", "checkpoints", "best_validation", "best_validation_accuracy", "accuracy_unit",
+        "metric_artifacts", "epoch_records", "completion_reason", "completed_at_utc", "attempt_history",
+        "transaction_id", "final_commit_id", "training_alpha", "canonical_training_alpha", "completion_provenance"}
+    exact(summary, expected_keys, "training-only summary")
+    for key, value in document["context"].items():
+        same(summary[key], value, f"training completion context {key}")
+    same(summary["training_completion_version"], 1, "training completion format")
+    same(summary["status"], "training_completed", "training completion status")
+    same(summary["completed_epochs"], EPOCHS, "training completion budget")
+    same(summary["scientific"], config.scientific, "training science")
+    same(summary["transaction_id"], document["transaction_id"], "training transaction")
+    same(summary["final_commit_id"], receipt.commit_id, "training final commit")
+    same(summary["checkpoints"], {role: asdict(getattr(receipt, role)) for role in ("latest", "best", "final")}, "training checkpoint roles")
+    same(summary["epoch_records"], document["records"], "training records")
+    same(summary["best_validation"], document["best"], "training validation selection")
+    same(summary["best_validation_accuracy"], document["best"]["correct"] / document["best"]["examples"], "training validation accuracy")
+    from .identity import canonical_alpha
+    same(summary["training_alpha"], config.scientific["alpha"], "explicit training alpha")
+    same(summary["canonical_training_alpha"], canonical_alpha(config.scientific["alpha"]), "explicit canonical training alpha")
+    same(summary["accuracy_unit"], "fraction", "training accuracy units")
+    same(summary["completion_reason"], "full_original_training_budget", "training completion reason")
+    from .provenance import software_provenance
+    writer = summary["completion_provenance"]
+    software_provenance(code=writer["code"], software=writer["software"], allocation=writer.get("allocation"))
+    if type(summary["completed_at_utc"]) is not str or not summary["completed_at_utc"]:
+        fail("Training completion requires creation time")
+    from .persistence import csv_views
+    epochs, layers = csv_views(records)
+    exact(summary["metric_artifacts"], {"epochs_csv", "layer_statistics_csv"}, "training CSV references")
+    for name, expected in (("epochs_csv", epochs), ("layer_statistics_csv", layers)):
+        ref = ArtifactReference.from_dict(summary["metric_artifacts"][name])
+        if ref.root != "results" or not ref.relative_path.startswith("training_completions/"):
+            fail("Training completion CSV must be immutable in training_completions")
+        same(ref.verify(paths).read_bytes().decode("utf-8"), expected, f"training {name}")
 
 
 def validate_failure_payload(payload, counters, receipt) -> None:

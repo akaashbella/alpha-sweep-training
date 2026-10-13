@@ -24,10 +24,10 @@ from .serialization import (
     read_json, resolved_config_text, strict_json_text,
 )
 
-RunOperation = Literal["new", "continue", "recover", "overwrite"]
+RunOperation = Literal["new", "continue", "recover", "overwrite", "finalize_training"]
 
 if TYPE_CHECKING:
-    from .continuation import ContinuationPlan
+    from .continuation import ContinuationPlan, TrainingFinalizationPlan
 
 
 class RunDirectoryError(RuntimeError):
@@ -66,7 +66,13 @@ class RunHandle:
     attempt_id: str
     archived_directories: tuple[Path, ...]
     provenance: dict = field(default_factory=dict)
+    _training_provenance: dict | None = field(default=None, repr=False, compare=False)
     _lease: _RunLease | None = field(default=None, repr=False, compare=False)
+
+    @property
+    def journal_provenance(self) -> dict:
+        """Finalization never claims the new publisher executed historical training."""
+        return deepcopy(self._training_provenance if self._training_provenance is not None else self.provenance)
 
     def require_active(self, config: RunConfig | None = None) -> None:
         """Reject use after open_run exits; this extends the existing run lock."""
@@ -259,7 +265,7 @@ def open_run(
     provenance: Mapping,
     operation: RunOperation = "new",
     overwrite_run_id: str | None = None,
-    continuation_plan: "ContinuationPlan | None" = None,
+    continuation_plan: "ContinuationPlan | TrainingFinalizationPlan | None" = None,
 ) -> Iterator[RunHandle]:
     """Explicit new/compatible-continue/publication-recover/selected-overwrite.
 
@@ -269,7 +275,7 @@ def open_run(
     repeated under locks. The plan/service separately restore or repair; entering
     this context itself never restores components or marks completion.
     """
-    if operation not in ("new", "continue", "recover", "overwrite"):
+    if operation not in ("new", "continue", "recover", "overwrite", "finalize_training"):
         raise RunDirectoryError(f"Unknown operation: {operation!r}")
     config.require_research_ready()
     config = effective_storage_config(config, base_dir)
@@ -289,17 +295,32 @@ def open_run(
     attempt_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex
     # Preflight even before creating lock files, then repeat under locks to close
     # the race with another cooperating writer between inspection and locking.
-    if operation in ("continue", "recover"):
+    historical_provenance = None
+    publication_only = False
+    if operation in ("finalize_training", "recover"):
+        from .continuation import TrainingFinalizationPlan
+        publication_only = isinstance(continuation_plan, TrainingFinalizationPlan)
+    if operation == "finalize_training" or publication_only:
+        if not publication_only:
+            raise RunDirectoryError("Training finalization requires a read-only full-budget TrainingFinalizationPlan")
+        continuation_plan.preflight(paths, config, current_provenance)
+        historical_provenance = continuation_plan.training_provenance
+    elif operation in ("continue", "recover"):
         from .continuation import ContinuationPlan
         if not isinstance(continuation_plan, ContinuationPlan):
             raise RunDirectoryError("Continue/recover requires a complete ContinuationPlan preflight before any run-specific writes")
         continuation_plan.preflight(paths, config, current_provenance, recovery=operation == "recover")
     elif continuation_plan is not None:
         raise RunDirectoryError("A continuation plan is only used with continue/recover")
-    _check_existing(paths, config, operation, current_provenance)
+    ownership_provenance = historical_provenance or current_provenance
+    _check_existing(paths, config, operation, ownership_provenance)
     with _run_locks(paths, expected):
-        _check_existing(paths, config, operation, current_provenance)
-        if operation in ("continue", "recover"):
+        _check_existing(paths, config, operation, ownership_provenance)
+        if publication_only:
+            continuation_plan.preflight(paths, config, current_provenance)
+            if continuation_plan.training_provenance != historical_provenance:
+                raise RunDirectoryError("Training provenance changed during finalization preflight")
+        elif operation in ("continue", "recover"):
             continuation_plan.preflight(paths, config, current_provenance, recovery=operation == "recover")
         archives = _archive_selected(paths, attempt_id) if operation == "overwrite" else ()
         for directory in paths.directories():
@@ -327,6 +348,6 @@ def open_run(
         try:
             yield RunHandle(config=config, paths=paths, operation=operation,
                             attempt_id=attempt_id, archived_directories=archives,
-                            provenance=deepcopy(current_provenance), _lease=lease)
+                            provenance=deepcopy(current_provenance), _training_provenance=deepcopy(historical_provenance), _lease=lease)
         finally:
             lease.active = False

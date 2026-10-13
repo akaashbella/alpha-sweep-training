@@ -35,6 +35,15 @@ VALIDATION_SIZE = 5_000
 TEST_SIZE = 10_000
 TOTAL_RUNS = len(DATASETS) * len(ARCHITECTURES) * len(ALPHAS) * SEED_COUNT
 
+# Independent evaluation contract. These aliases do not change training hashes.
+TRAINING_ALPHAS = ALPHAS
+EVALUATION_PROTOCOL_VERSION = "weight_robustness_eval_v1"
+EVALUATION_RANDOMNESS_VERSION = "sha256-best-checkpoint-realization-v1"
+EVALUATION_ALPHAS = (0.0, 0.01, 0.02, 0.05, 0.10, 0.20, 0.30, 0.50, 0.75, 1.0)
+EVALUATION_REPLICATES = (1, 2, 3)
+EVALUATION_SLOTS_PER_CHECKPOINT = 1 + (len(EVALUATION_ALPHAS) - 1) * len(EVALUATION_REPLICATES)
+TOTAL_EVALUATION_SLOTS = TOTAL_RUNS * EVALUATION_SLOTS_PER_CHECKPOINT
+
 # Inactive optimizer fields remain null, so there is one explicit serialization schema.
 _OPTIMIZER_RECIPES = {
     "resnet50": {
@@ -124,6 +133,9 @@ def default_document(dataset: str, architecture: str) -> dict:
                 "perturb_buffers": False, "batchnorm_running_updates": True,
             },
             "evaluation": {
+                # Frozen schema-4 wire fields: clean validation/checkpoint selection
+                # and mandatory clean test baseline. Independent robustness uses
+                # EVALUATION_PROTOCOL_VERSION, never a change to this training hash.
                 "clean_weights": True, "best_metric": "validation_accuracy",
                 "best_tie_policy": "earliest_epoch", "test_checkpoint": "best",
                 "test_every_alpha_and_seed": True,

@@ -126,6 +126,28 @@ def main(argv=None) -> int:
     status = commands.add_parser("status", help="Read-only observations joined to all 240 expected tasks")
     status.add_argument("--manifest", required=True)
     _execution_options(status)
+    evaluation_plan_parser = commands.add_parser("evaluation-plan", help="Linked 6,720 logical slots; no checkpoint placeholders or jobs")
+    evaluation_plan_parser.add_argument("--manifest", required=True)
+    evaluation_inspect = commands.add_parser("evaluation-inspect", help="Read-only checkpoint eligibility and 28-slot coverage")
+    evaluation_inspect.add_argument("--manifest", required=True)
+    _selectors(evaluation_inspect)
+    _execution_options(evaluation_inspect)
+    evaluation_inspect.add_argument("--evaluation-root")
+    evaluate = commands.add_parser("evaluate", help="Independently evaluate selected/missing best-checkpoint slots")
+    evaluate.add_argument("--manifest", required=True)
+    _selectors(evaluate)
+    _execution_options(evaluate)
+    evaluate.add_argument("--evaluation-root")
+    evaluate.add_argument("--source-root", required=True)
+    evaluate.add_argument("--evaluation-alpha", type=float, nargs="+")
+    evaluate.add_argument("--evaluation-replicate", type=int, nargs="+")
+    evaluate.add_argument("--retry-failed", action="store_true")
+    evaluate.add_argument("--reuse-legacy-clean", action="store_true",
+                          help="Require verified immutable exact-state legacy proof; standard v1 needs a new clean pass")
+    evaluation_status = commands.add_parser("evaluation-status", help="Join training + every expected evaluation slot across the full grid")
+    evaluation_status.add_argument("--manifest", required=True)
+    _execution_options(evaluation_status)
+    evaluation_status.add_argument("--evaluation-root")
     args = parser.parse_args(argv)
     try:
         code = 0
@@ -133,7 +155,14 @@ def main(argv=None) -> int:
             result = _build(args)
         else:
             manifest = load_manifest(args.manifest)
-            if args.command == "inspect":
+            if args.command == "evaluation-plan":
+                from .manifests import evaluation_plan
+                result = evaluation_plan(manifest)
+            elif args.command == "evaluation-status":
+                from .evaluation_execution import collect_experiment_coverage
+                result = collect_experiment_coverage(manifest, base_dir=args.base_dir,
+                    overrides=_overrides(args), evaluation_root=args.evaluation_root)
+            elif args.command == "inspect":
                 phase = None if args.phase_view is None else load_phase(args.phase_view, manifest)
                 result = {"grid_id": manifest.grid_id, "document_sha256": manifest.document_sha256,
                           "tasks": len(manifest.tasks), "seeds": list(manifest.seeds),
@@ -145,7 +174,18 @@ def main(argv=None) -> int:
                 task = _selection(manifest, args)
                 overrides = _overrides(args)
                 task_config(task, overrides)  # Reject science/invalid types before execution imports.
-                if args.command == "select":
+                if args.command == "evaluation-inspect":
+                    from .evaluation_execution import inspect_evaluation_eligibility
+                    result = inspect_evaluation_eligibility(task, base_dir=args.base_dir,
+                        overrides=overrides, evaluation_root=args.evaluation_root)
+                elif args.command == "evaluate":
+                    from .evaluation_execution import execute_evaluation
+                    outcome = execute_evaluation(manifest, task, base_dir=args.base_dir,
+                        source_root=args.source_root, overrides=overrides, evaluation_root=args.evaluation_root,
+                        evaluation_alphas=args.evaluation_alpha, evaluation_replicates=args.evaluation_replicate,
+                        retry_failed=args.retry_failed, reuse_legacy_clean=args.reuse_legacy_clean)
+                    result, code = outcome.to_dict(), outcome.exit_code
+                elif args.command == "select":
                     result = {"task": task.to_dict(), "effective_config": task_config(task, overrides).to_dict()}
                 else:
                     from .task_execution import execute_task

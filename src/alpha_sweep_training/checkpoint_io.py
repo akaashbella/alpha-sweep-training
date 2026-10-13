@@ -9,7 +9,7 @@ from .artifacts import RunHandle, RunPaths, _is_link
 from .serialization import atomic_write_json, atomic_write_text, fsync_directory, read_json
 from .training_contracts import PersistenceContractError, _digest
 
-TRANSACTION_VERSION = 1
+TRANSACTION_VERSION = 2  # v1 combined clean-test completion remains read-only compatible.
 CHECKPOINT_FORMAT_VERSION = 1
 
 

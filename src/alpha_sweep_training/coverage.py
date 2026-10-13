@@ -33,7 +33,11 @@ class TaskObservation:
     condition: str
     stored_status: str | None = None
     completed_epochs: int | None = None
-    pending_evaluation: bool | None = None
+    training_complete: bool = False
+    full_budget_committed: bool = False
+    evaluation_eligible: bool = False
+    training_finalization_pending: bool = False
+    legacy_clean_test: bool = False
     terminal_numerical: bool = False
     execution_failed: bool = False
     locks: tuple[str, ...] = ()
@@ -45,7 +49,8 @@ class TaskObservation:
     diagnostic: str | None = None
 
     def to_dict(self):
-        return asdict(self)
+        return {**asdict(self), "training_alpha": self.alpha,
+                "canonical_training_alpha": self.canonical_alpha}
 
 
 def _lock_paths(paths):
@@ -126,31 +131,37 @@ def inspect_task(task: Task, *, base_dir, overrides=None, provenance=None) -> Ta
             saved = software_provenance(code=saved["code"], software=saved["software"], allocation=saved.get("allocation"))
             current_provenance = saved if provenance is None else software_provenance(
                 code=provenance["code"], software=provenance["software"], allocation=provenance.get("allocation"))
-            if (saved["code"]["source_sha256"] != current_provenance["code"]["source_sha256"]
-                    or saved["software"] != current_provenance["software"]):
-                raise _Incompatible("Actual execution source/software differs from stored provenance")
-            _check_existing(paths, config, "recover", current_provenance)
+            _check_existing(paths, config, "recover", saved)
             from .checkpoint_journal import numerical_failure_evidence, execution_failure_evidence, read_committed
             from .checkpoint_io import ArtifactReference, read_document
             from .recovery import inspect_completion
-            current = read_committed(paths, config, current_provenance)
+            current = read_committed(paths, config, saved)
+            budget_complete = current.receipt.completed_epochs == EPOCHS
+            if not budget_complete and (saved["code"]["source_sha256"] != current_provenance["code"]["source_sha256"]
+                    or saved["software"] != current_provenance["software"]):
+                raise _Incompatible("Training continuation source/software differs; read-only evaluation/finalization is a separate policy")
+            current_provenance = saved
             stored_data = current.latest["metadata"]["data_identity"]
             if any(stored_data[key] != value for key, value in task.prepared_data.items()):
                 raise _Incompatible("Stored prepared-data identities disagree with manifest")
-            evidence = () if current.status == "completed" else numerical_failure_evidence(paths, config, current_provenance)
-            execution_evidence = () if current.status == "completed" else execution_failure_evidence(
+            evidence = () if budget_complete else numerical_failure_evidence(paths, config, current_provenance)
+            execution_evidence = () if budget_complete else execution_failure_evidence(
                 paths, config, current_provenance, training_commit_id=current.receipt.commit_id)
             failure_ref = current.document["artifacts"]["failure"]
             failure = None if failure_ref is None else read_document(paths, ArtifactReference.from_dict(failure_ref))["payload"]
-            if current.status == "completed":
+            training_complete = current.status in ("completed", "training_completed")
+            if training_complete:
                 completion = inspect_completion(config, base_dir=base_dir, provenance=current_provenance)
                 if completion is None or completion.transaction != current.reference:
                     raise RuntimeError("Completion changed during inspection")
             count = current.receipt.completed_epochs
             values = {"condition": "ok", "stored_status": current.status, "completed_epochs": count,
-                "pending_evaluation": count == EPOCHS and current.status != "completed",
-                "terminal_numerical": current.status == "failed_numerical" or bool(evidence),
-                "execution_failed": current.status == "failed_execution" or bool(execution_evidence),
+                "training_complete": training_complete, "full_budget_committed": budget_complete,
+                "evaluation_eligible": budget_complete,
+                "training_finalization_pending": budget_complete and not training_complete,
+                "legacy_clean_test": current.status == "completed",
+                "terminal_numerical": not budget_complete and (current.status == "failed_numerical" or bool(evidence)),
+                "execution_failed": not budget_complete and (current.status == "failed_execution" or bool(execution_evidence)),
                 "numerical_evidence": tuple(ref.to_dict() for ref in evidence),
                 "execution_evidence": tuple(ref.to_dict() for ref in execution_evidence),
                 "evidence_failures": tuple({"reference": ref.to_dict(), "failure": read_document(
@@ -184,15 +195,16 @@ def inspect_task(task: Task, *, base_dir, overrides=None, provenance=None) -> Ta
 
 
 def _counts(rows):
-    completed = sum(r.condition == "ok" and r.stored_status == "completed" for r in rows)
+    completed = sum(r.condition == "ok" and r.training_complete for r in rows)
     numeric = sum(r.condition == "ok" and r.terminal_numerical for r in rows)
     execution = sum(r.condition == "ok" and not r.terminal_numerical and r.execution_failed for r in rows)
-    return {"expected": len(rows), "completed": completed, "failed": numeric + execution,
+    return {"expected": len(rows), "training_completed": completed, "training_failed": numeric + execution,
         "failed_numerical": numeric, "failed_execution": execution,
-        "unfinished": len(rows) - completed - numeric - execution,
+        "training_unfinished": len(rows) - completed - numeric - execution,
         "interrupted": sum(r.condition == "ok" and r.stored_status == "interrupted"
                            and not r.terminal_numerical and not r.execution_failed for r in rows),
-        "pending_evaluation": sum(r.pending_evaluation is True for r in rows),
+        "evaluation_eligible": sum(r.evaluation_eligible for r in rows),
+        "training_finalization_pending": sum(r.training_finalization_pending for r in rows),
         **{name: sum(r.condition == name for r in rows) for name in
            ("missing", "locked", "partial", "incompatible", "corrupt", "unstable", "inspection_error")}}
 
@@ -206,14 +218,13 @@ def collect_coverage(manifest: Manifest, *, base_dir, overrides=None) -> dict:
         selected = tuple(r for r in rows if r.phase == phase)
         counts = _counts(selected)
         phases.append({"phase": phase, "dataset": dataset, **counts,
-            "successfully_completed": counts["completed"] == counts["expected"],
+            "training_successfully_completed": counts["training_completed"] == counts["expected"],
             "terminal_scientific_failures": counts["failed_numerical"],
-            "settled_with_scientific_failures": counts["completed"] + counts["failed_numerical"] == counts["expected"],
-            "eligible": phase == 1 or phases[phase - 2]["successfully_completed"],
+            "training_settled_with_scientific_failures": counts["training_completed"] + counts["failed_numerical"] == counts["expected"],
+            "training_eligible": phase == 1 or phases[phase - 2]["training_successfully_completed"],
             "automatic_candidates": [r.run_id for r in selected if r.condition == "missing" or
-                (r.condition == "ok" and not r.terminal_numerical and not r.execution_failed and r.stored_status in
-                 ("initialized", "training", "interrupted", "trained_pending_test", "evaluating"))]})
-    return {"coverage_version": 1, "grid_id": manifest.grid_id, "manifest_document_sha256": manifest.document_sha256,
+                (r.condition == "ok" and not r.training_complete and not r.terminal_numerical and not r.execution_failed)]})
+    return {"coverage_version": 2, "lifecycle": "training", "grid_id": manifest.grid_id, "manifest_document_sha256": manifest.document_sha256,
         "counts": _counts(rows), "phases": phases,
         "datasets": {name: _counts(tuple(r for r in rows if r.dataset == name)) for name in DATASETS},
         "architectures": {name: _counts(tuple(r for r in rows if r.architecture == name)) for name in ARCHITECTURES},
