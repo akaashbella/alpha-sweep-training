@@ -1,6 +1,6 @@
 # Development declaration for main-v1, never a smoke/reduced-budget configuration.
 # null means unresolved and blocks research execution, not a runtime default.
-schema_version: 3
+schema_version: 4
 scientific:
   specification_version: main-v1
   dataset: cifar10
@@ -21,6 +21,8 @@ scientific:
       std: null
       source: null
   training:
+    engine_version: functional-fp32-training-v1
+    randomness_version: sha256-runtime-streams-v1
     scheduler_version: completed-units-linear-cosine-v1
     drop_last: null
     warmup_start_factor: null

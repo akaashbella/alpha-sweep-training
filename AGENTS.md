@@ -5,6 +5,7 @@ The shared contracts and ordered remaining steps are in [docs/implementation-pla
 Configuration semantics and unresolved decisions are in [docs/configuration.md](docs/configuration.md).
 Implemented dataset/preparation contracts are in [docs/datasets.md](docs/datasets.md).
 Implemented model/optimizer/scheduler contracts are in [docs/models-and-optimization.md](docs/models-and-optimization.md).
+Implemented training/perturbation/evaluation and Step 5 service contracts are in [docs/training-and-perturbation.md](docs/training-and-perturbation.md).
 
 ## Implementation-only workflow
 
@@ -102,6 +103,19 @@ datasets, and fine sweeps are outside the main scope. Do not add them implicitly
   horizon. AMP-skipped updates do not advance optimizer-step cadence. Restore
   with `initialize=False`, optimizer state first and scheduler state afterward;
   completed epochs and successful optimizer updates remain separate counters.
+- Step 4 uses functional temporary tensors connected to original float32 clean
+  parameters, detached float32 scales/noise, and original learned buffers. Alpha
+  zero takes the ordinary forward and consumes no noise. Never checkpoint a
+  perturbed view or reset BatchNorm for clean evaluation.
+- Runtime model/noise streams exclude alpha and are seeded once or restored;
+  artifact callbacks preserve them. Honor explicit CUDA/precision/backend policy.
+  Managed float16 AMP skips use observed native optimizer calls, never return values.
+- Step 5 must implement TrainingPersistence's commit_epoch, load_best,
+  publish_completion and publish_failure. Owned CPU snapshots are read-only;
+  acknowledgements mean durable transactions. CSV/logs never determine resume
+  position. Load persisted best into a separate evaluation model; never overwrite
+  latest with best weights and final optimizer state. Stop Step 4 before durable
+  persistence/recovery, launchers or signal orchestration.
 
 ## HPC constraints
 
