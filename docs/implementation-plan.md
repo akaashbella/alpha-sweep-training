@@ -1,18 +1,18 @@
 # Shared contracts and remaining implementation steps
 
-Step 1 implements configuration, identity, finite atomic serialization,
-provenance record validation, path resolution, and guarded artifact initialization.
-Everything described below for datasets/models/training/checkpoints/controllers/
-Slurm/reporting is a future interface, not an implemented module. There are no
-placeholder builders or executable experiment entry points.
+Steps 1–2 implement configuration, identity, finite atomic serialization,
+provenance validation, guarded run initialization, full official CIFAR preparation,
+and reproducible loaders. Dataset implementation has not been executed or
+runtime-verified. Models/training/checkpoints/controllers/Slurm/reporting below
+are future interfaces. There are no placeholder builders or training entry points.
 
 ## Responsibilities and interfaces
 
 | Component | Input → output / responsibility | Step |
 | --- | --- | --- |
 | Configuration | load_config(base_path, dataset_path, model_path, typed overrides) → RunConfig; strict declaration validity separate from require_research_ready | 1 |
-| Dataset preparation | prepare_dataset(dataset, data_root, approved split/normalization decisions) → persisted verified dataset/split/preprocessing metadata; no training-seed-dependent split | 2 |
-| Data loading | build_loaders(config, split artifact, training RNG state) → train/validation/test loaders and dataset metadata; full validation/test sets, configured train drop_last | 2 |
+| Dataset preparation | prepare_dataset(config, base_dir, normalization: NormalizationRequest, split_seed, download=False) → PreparationResult; independent explicit split seed; committed manifest and config | 2 implemented |
+| Data loading | build_loaders(config, base_dir, pin_memory=False, persistent_workers=False) → DataLoaders with train/validation/test, metadata, set_epoch, continuation_metadata, restore_next_epoch | 2 implemented |
 | Model construction | build_model(config) → scratch CIFAR-adapted model with dataset classifier; report eligible parameter inventory | 3 |
 | Optimizer/scheduler | build_optimizer(model, config) and build_scheduler(optimizer, config, steps_per_epoch) → exact fixed recipe and original-budget schedule | 3 |
 | Perturbation | perturbed_training_weights(model, alpha, noise_generator) → exception-safe temporary perturbed view with detached scale/noise and gradients to clean/master parameters | 4 |
@@ -36,8 +36,8 @@ disjoint train/validation indices, and fixed ordering. Persist split metadata
 and indices on shared storage. Define `scientific.data.split.identity` as
 `sha256:` plus the SHA-256 of canonical sorted finite JSON containing a split
 format version, dataset name, official-training-set identity, and the ordered
-training and validation index arrays. The dataset preparation implementation
-must define that official-set identity precisely before creating artifacts.
+training and validation index arrays. The implemented official-set identity is
+defined precisely in [datasets.md](datasets.md).
 Ordering belongs to the hash; a filesystem location does not. A generation
 seed/algorithm, if selected, is recorded in split metadata; no provisional seed
 is specified in Step 1. Verify the hash before building loaders.
@@ -46,11 +46,14 @@ Resolve normalization from approved constants or an approved reproducible
 training-data derivation, persist actual constants and their source identity,
 and do not infer constants from test images. Preserve native image dimensions.
 The training seed controls initialization, shuffle, augmentation, and weight
-noise, not split selection. Define independent RNG streams and save their states.
-Sampler/augmentation identity must remain independent of operational worker
-counts (e.g. deterministic epoch/sample keyed randomness); otherwise a worker
-count cannot honestly remain outside scientific identity. Step 2 must settle
-this contract and record exact transform semantics before execution.
+noise, not split selection. Record the stateless data epoch contract and preserve
+independent model/noise RNG state during Step 5 continuation.
+The implemented versioned SHA-256 keyed order/crop/flip streams are independent
+of alpha, architecture, operational workers, and global model RNGs. Sampler keys
+carry epoch into worker copies. See [datasets.md](datasets.md) for exact semantics.
+Call DataLoaders.set_epoch before each training epoch. The minimal completed-epoch
+data continuation record reconstructs the next epoch without mutable data RNG
+cursors; Step 5 also restores separate model/noise/optimizer/scheduler state.
 
 ## Training and scheduler boundary
 
@@ -80,10 +83,9 @@ to continuation when the finalized precision policy uses them.
 Use zero-based epoch indices internally and record `completed_epochs` as a
 count from 0 through 200. `next_epoch_index == completed_epochs` for epoch-boundary
 continuation. Human displays may use epochs 1–200 but must label the conversion.
-If later supporting a mid-epoch safe boundary, record sampler cursor and update
-position explicitly; never approximate the next batch from a wall-clock cutoff.
-Keeping continuation at complete epoch boundaries is acceptable, with lost work
-since latest recorded explicitly.
+Data continuation uses completed-epoch boundaries. Replay any unfinished epoch
+from the last committed boundary, recording lost work since latest. Do not infer
+batch position from wall time or add speculative mid-batch resume machinery.
 
 Every checkpoint requires:
 
@@ -99,8 +101,10 @@ Every checkpoint requires:
   recorded separately from scientific identity.
 
 Latest additionally requires optimizer, scheduler, any AMP scaler, Python/NumPy/
-torch CPU/CUDA RNG state, dedicated weight-noise and sampler/augmentation RNG
-states, and any cursor/data-loader state necessary for its promised safe boundary.
+torch CPU/CUDA RNG state, dedicated weight-noise state, and
+DataLoaders.continuation_metadata(next_epoch_index) for the completed-epoch data
+boundary. Data order/augmentation use reconstructed local generators rather than
+saved mutable RNG cursors. Worker-only incidental RNG states do not affect samples.
 Best/final need model and selection metadata; they must not be used as implicit
 latest continuation state. Checkpoint tensors must be clean; normalization
 buffers (including trained BatchNorm statistics) are preserved.
@@ -152,9 +156,9 @@ complete three-seed set. Specify cross-seed std convention and how exact
 validation-mean ties are reported before generating final aggregates. Report
 test results for every alpha/seed, not only the selected alpha.
 
-## Remaining steps in order
+## Step 2 completed in source; remaining steps in order
 
-2. **Dataset preparation and reproducibility.** Official dataset integrity,
+2. **Dataset preparation and reproducibility (implemented, execution deferred).** Official dataset integrity,
    persistent fixed splits, finalized normalization, seeding/augmentation
    contracts, full-set loaders, and artifact identity verification.
 3. **Four architectures and fixed optimizer recipes.** Scratch CIFAR builders,
@@ -181,4 +185,4 @@ test results for every alpha/seed, not only the selected alpha.
 
 Each implementation step ends with source and Git-diff inspection, not executable
 verification. Do not create tests, smoke configs, demonstrations, preliminary
-experiments, or placeholder modules. Step 1 stops before dataset implementation.
+experiments, or placeholder modules. Step 2 stops before model/optimizer implementation.

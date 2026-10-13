@@ -2,12 +2,22 @@
 
 ## Schema and current scope
 
-`schema_version: 1` describes the file structure; `scientific.specification_version:
+`schema_version: 2` describes the file structure; `scientific.specification_version:
 main-v1` describes the experiment. The effective document has exactly three top
 keys: `schema_version`, `scientific`, `execution`. No arbitrary extra settings,
 unknown names, duplicate YAML keys, non-string mapping keys, YAML merge keys,
 or bool-as-integer coercion are accepted. Numeric strings are not numbers.
 Configuration validation does not import torch or check whether a builder exists.
+
+Step 2 adds two fixed scientific fields: `data.preprocessing_version` and
+`data.randomness_version`. They identify the exact approved padding/flip/tensor
+semantics and local epoch/sample keyed RNG contract. Defaults and declarations
+record them explicitly; alternate values are rejected. Schema 1 declarations
+and full documents receive an explicit additive migration to schema 2, filling
+only fixed contract fields and spelling out tensor conversion in the previously
+implicit transform lists. No pending choice is resolved by migration.
+Saved YAML always uses schema 2. Fingerprint format is now version 2, so older
+run artifacts are incompatible with blind continuation/output reuse.
 
 `spec.py` centrally defines datasets/class counts, architecture names, ten
 approved alphas, training/split sizes, and all optimizer recipes. `config.py`
@@ -72,11 +82,12 @@ Null means unresolved, never "use library/default/smoke value."
 | Precision | scientific.precision.mode | float32, amp_float16, or amp_bfloat16 |
 | Backend/determinism | scientific.precision.float32_matmul_precision / allow_tf32 / deterministic_algorithms / cudnn_deterministic / cudnn_benchmark | Explicit supported string/bools; allow_tf32 controls both CUDA matmul and cuDNN TF32 |
 | Persisted split identity | scientific.data.split.identity | Step 2-generated sha256 identity of the actual ordered training/validation indices and dataset |
+| Split preparation seed | Explicit --split-seed preparation input, recorded in split generation metadata | Required to create a new split; separate from every training seed; no default |
 | Warmup endpoints | scientific.training.warmup_start_factor | Explicit factor in [0,1] relative to the architecture's base LR |
 | Cosine endpoint | scientific.training.cosine_min_lr | Explicit finite LR between zero and the architecture's base LR |
 | Scheduler cadence | scientific.training.scheduler_interval | epoch or optimizer_step, with the exact indexing equation documented in Step 3 |
 
-The last four rows are necessary to avoid inventing unspecified split/scheduler
+The split identity and scheduler rows are necessary to avoid inventing unspecified split/scheduler
 details. There is no provisional split seed, guessed normalization, training
 seed list, precision, batch policy, or warmup/cosine endpoint. A split's identity
 is supplied by dataset preparation, not chosen by the training seed. A derivation
@@ -95,6 +106,13 @@ Step 7 validates the chosen account and resources before submission. Step 2
 validates dataset files and the actual split artifact before loading. These
 operational checks are separate from scientific readiness.
 
+`prepare_dataset` deliberately does not call research readiness: it requires only
+valid configuration, an explicit normalization request, and an explicit split
+seed for a new split. `build_loaders` requires resolved selected training seed,
+drop_last, split/normalization, and prepared artifacts; the three-seed plan,
+precision, and scheduler may remain pending during development. Actual launchers
+must still call `require_research_ready()` later.
+
 ## Scientific identity and provenance
 
 Human-readable run IDs have the form
@@ -104,11 +122,12 @@ rounding: 0.10 and 0.1 map to `0.1`, 1 and 1.00 to `1`, and signed zero to `0`.
 All ten approved values remain distinct. Numeric strings are rejected.
 
 `scientific_fingerprint` returns a full SHA-256 hex digest of sorted canonical
-finite JSON containing fingerprint version 1, schema version 1, and the entire
+finite JSON containing fingerprint version 2, schema version 2, and the entire
 effective scientific section. It includes selected seed, the three-seed plan,
 dataset/model, alpha, full training/optimizer/perturbation/evaluation settings,
 split hash, normalization identity/constants, and resolved precision/backend
-policy. Fixed numeric values and alpha are normalized on validation. It excludes
+policy, including the preprocessing/randomness versions. Fixed numeric values
+and alpha are normalized on validation. It excludes
 all execution paths, worker/CPU/RAM requests, allocation wall time, account,
 Slurm IDs, timestamps, and code/software provenance. A version or scientific
 change therefore prevents compatible reuse despite an unchanged human name.
@@ -191,3 +210,28 @@ metrics to null only while recording explicit failure status/reason.
 The foundation does not implement checkpoint restoration, a training launcher,
 manifest expansion, or final result production. Their interfaces are defined in
 [the implementation plan](implementation-plan.md).
+
+## Prepared dataset configurations
+
+Preparation writes `<data_root>/.alpha_sweep_prepared/<dataset>/dataset_config.yaml`
+with full loader-compatible schema 2 settings. It supplies the actual split
+identity, normalization mean/std, `normalization.source = normalization-v1:sha256:<digest>`,
+and absolute operational data_root/split_file paths. The human constants source
+or derivation description lives in normalization.json and is covered by its
+identity. Unrelated pending fields remain pending. Shared artifacts are not
+run-specific outputs and use a separate preparation lock.
+
+The preparation manifest is the fixed sibling `manifest.json` of split.json,
+not an unvalidated configuration dictionary or a new optional path. The loader
+requires the one dataset-level location beneath the chosen data_root. Reuse
+keeps the original shared YAML unchanged; the preparation API returns this
+caller's effective RunConfig as well. Use the shared file as a base for later
+model/task overrides, not as an unconditional high-priority overlay that might
+replace an already-selected architecture/recipe.
+
+After relocating raw/prepared files, override execution.storage.data_root and
+execution.storage.split_file together. Manifest/config checksums validate the
+preserved stored YAML, while the supplied run config's operational paths select
+the new location. Content identities stay unchanged. No schema keys are needed
+for normalization-policy or split-seed defaults: these are explicit preparation
+inputs, and persisted identities determine effective research data settings.

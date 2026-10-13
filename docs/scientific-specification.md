@@ -1,6 +1,6 @@
 # Main experiment: main-v1
 
-This is the authoritative scientific specification. Schema version 1 and
+This is the authoritative scientific specification. Schema version 2 and
 `src/alpha_sweep_training/spec.py` implement its current configuration contract.
 Changes to the scientific specification require explicit agreement and a
 versioned update; execution resource changes do not.
@@ -51,10 +51,20 @@ shared across architectures, alphas, and seeds. Never use reduced subsets for a
 research configuration. Test data do not inform split or normalization decisions.
 
 Training transforms, in order: random crop with padding 4, random horizontal
-flip, dataset-specific normalization. Validation/test use deterministic
-normalization without random augmentation or resizing. Final normalization
+flip, conversion to CPU float32 channel-first tensors using uint8/255, and
+dataset-specific normalization. Padding is constant zero on all four sides;
+crop offsets are uniform over 0–8 inclusive; flip probability is 0.5.
+Validation/test use deterministic tensor conversion and normalization without
+random augmentation or resizing. Final normalization
 constants or their derivation policy remain pending. Step 2 must persist the
 actual finite constants and their source/derivation identity before execution.
+
+Step 2's dataset implementation exists, with execution deferred. Shared
+preparation requires an explicit independent split seed for a new unstratified
+PCG64 permutation and an explicit normalization policy (supplied RGB constants
+with source, or training-partition population moments). No permanent split seed
+or normalization policy has been chosen. The implementation is documented in
+[the dataset guide](datasets.md); training workers only read finalized artifacts.
 
 ## Models
 
