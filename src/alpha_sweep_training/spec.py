@@ -2,9 +2,12 @@
 
 from copy import deepcopy
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 SPECIFICATION_VERSION = "main-v1"
-FINGERPRINT_VERSION = 3
+FINGERPRINT_VERSION = 4
+TRAINING_ENGINE_VERSION = "functional-fp32-training-v1"
+RUNTIME_RANDOMNESS_VERSION = "sha256-runtime-streams-v1"
+TRAINING_RECORD_VERSION = 1
 MODEL_BUILDER_VERSION = "torchvision-cifar-builders-v1"
 MODEL_INITIALIZATION_VERSION = "sha256-isolated-cpu-float32-v1"
 ELIGIBLE_WEIGHT_VERSION = "conv2d-linear-owned-weights-v1"
@@ -94,6 +97,8 @@ def default_document(dataset: str, architecture: str) -> dict:
             },
             "optimizer": optimizer_recipe(architecture),
             "training": {
+                "engine_version": TRAINING_ENGINE_VERSION,
+                "randomness_version": RUNTIME_RANDOMNESS_VERSION,
                 "scheduler_version": SCHEDULER_VERSION,
                 "epochs": EPOCHS, "batch_size": BATCH_SIZE,
                 "loss": "cross_entropy", "warmup_epochs": WARMUP_EPOCHS,

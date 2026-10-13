@@ -15,6 +15,7 @@ from .spec import (
     ALPHAS, ARCHITECTURES, DATASETS, SCHEMA_VERSION, SEED_COUNT,
     PREPROCESSING_VERSION, DATA_RANDOMNESS_VERSION, default_document,
     MODEL_BUILDER_VERSION, MODEL_INITIALIZATION_VERSION, SCHEDULER_VERSION,
+    TRAINING_ENGINE_VERSION, RUNTIME_RANDOMNESS_VERSION,
 )
 
 
@@ -385,7 +386,8 @@ def _migrate_declaration(document: Mapping) -> dict:
     """Explicit additive migration; never resolve a pending scientific decision.
 
     Version 1 -> 2 adds data contracts/explicit tensor conversion. Version 2 -> 3
-    adds builder/initialization/scheduler contracts. Pending choices stay pending.
+    adds builder/initialization/scheduler contracts. Version 3 -> 4 adds training
+    and runtime randomness contracts. Pending choices stay pending.
     """
     result = deepcopy(dict(document))
     if type(result.get("schema_version")) is int and result["schema_version"] == 1:
@@ -404,7 +406,7 @@ def _migrate_declaration(document: Mapping) -> dict:
                 science["data"] = data
             result["scientific"] = science
     if type(result.get("schema_version")) is int and result["schema_version"] == 2:
-        result["schema_version"] = SCHEMA_VERSION
+        result["schema_version"] = 3
         if "scientific" in result:
             science = _mapping(result["scientific"], "scientific")
             if "model" in science:
@@ -415,6 +417,16 @@ def _migrate_declaration(document: Mapping) -> dict:
             if "training" in science:
                 training = _mapping(science["training"], "scientific.training")
                 training.setdefault("scheduler_version", SCHEDULER_VERSION)
+                science["training"] = training
+            result["scientific"] = science
+    if type(result.get("schema_version")) is int and result["schema_version"] == 3:
+        result["schema_version"] = SCHEMA_VERSION
+        if "scientific" in result:
+            science = _mapping(result["scientific"], "scientific")
+            if "training" in science:
+                training = _mapping(science["training"], "scientific.training")
+                training.setdefault("engine_version", TRAINING_ENGINE_VERSION)
+                training.setdefault("randomness_version", RUNTIME_RANDOMNESS_VERSION)
                 science["training"] = training
             result["scientific"] = science
     return result

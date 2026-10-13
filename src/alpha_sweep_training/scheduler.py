@@ -221,6 +221,15 @@ class WarmupCosineScheduler:
                 "current_learning_rates": list(self.current_learning_rates),
                 "position_semantics": "completed_cadence_units; next_unit_uses_lr_at_position"}
 
+    def require_binding(self, optimizer: Optimizer, config: RunConfig, steps_per_epoch: int) -> None:
+        """Training preflight: same optimizer and complete configured descriptor."""
+        if self._optimizer is not optimizer:
+            raise SchedulerError("Scheduler is bound to a different optimizer")
+        reference = WarmupCosineScheduler(optimizer, config, steps_per_epoch, initialize=False)
+        if self._schedule != reference._schedule:
+            raise SchedulerError("Scheduler descriptor differs from the original config/actual loader")
+        self.current_learning_rates
+
 
 def build_scheduler(optimizer: Optimizer, config: RunConfig, steps_per_epoch: int | None,
                     *, initialize: bool = True) -> WarmupCosineScheduler:

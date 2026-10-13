@@ -7,7 +7,8 @@ deletes them. No helpers here are called during repository implementation.
 """
 
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from copy import deepcopy
 from datetime import datetime, timezone
 import os
 from pathlib import Path
@@ -46,6 +47,11 @@ class RunPaths:
         return {name: str(getattr(self, name)) for name in ("metadata", "checkpoints", "results", "logs")}
 
 
+@dataclass
+class _RunLease:
+    active: bool = True
+
+
 @dataclass(frozen=True)
 class RunHandle:
     config: RunConfig
@@ -53,6 +59,15 @@ class RunHandle:
     operation: RunOperation
     attempt_id: str
     archived_directories: tuple[Path, ...]
+    provenance: dict = field(default_factory=dict)
+    _lease: _RunLease | None = field(default=None, repr=False, compare=False)
+
+    def require_active(self, config: RunConfig | None = None) -> None:
+        """Reject use after open_run exits; this extends the existing run lock."""
+        if self._lease is None or not self._lease.active:
+            raise RunDirectoryError("Hold open_run's context throughout training and every artifact write")
+        if config is not None and scientific_fingerprint(config) != scientific_fingerprint(self.config):
+            raise RunDirectoryError("Run handle and component configuration have different scientific identities")
 
 
 def effective_storage_config(config: RunConfig, base_dir: str | Path) -> RunConfig:
@@ -289,5 +304,10 @@ def open_run(
             "directories": paths.to_dict(), "archives": [str(path) for path in archives],
         })
         atomic_write_text(paths.metadata / "resolved_config.yaml", yaml_text)
-        yield RunHandle(config=config, paths=paths, operation=operation,
-                        attempt_id=attempt_id, archived_directories=archives)
+        lease = _RunLease()
+        try:
+            yield RunHandle(config=config, paths=paths, operation=operation,
+                            attempt_id=attempt_id, archived_directories=archives,
+                            provenance=deepcopy(current_provenance), _lease=lease)
+        finally:
+            lease.active = False
