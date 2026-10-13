@@ -1,0 +1,11 @@
+schema_version: 1
+scientific:
+  architecture: resnet50
+  optimizer:
+    name: sgd
+    learning_rate: 0.1
+    momentum: 0.9
+    weight_decay: 0.0005
+    rmsprop_alpha: null
+    epsilon: null
+    betas: null

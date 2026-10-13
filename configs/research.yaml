@@ -1,0 +1,47 @@
+# Development declaration for main-v1, never a smoke/reduced-budget configuration.
+# null means unresolved and blocks research execution, not a runtime default.
+schema_version: 1
+scientific:
+  specification_version: main-v1
+  dataset: cifar10
+  architecture: resnet50
+  alpha: 0
+  training_seed: null
+  training_seeds: null
+  data:
+    split:
+      identity: null
+    normalization:
+      mean: null
+      std: null
+      source: null
+  training:
+    drop_last: null
+    warmup_start_factor: null
+    cosine_min_lr: null
+    scheduler_interval: null
+  precision:
+    mode: null
+    float32_matmul_precision: null
+    allow_tf32: null
+    deterministic_algorithms: null
+    cudnn_deterministic: null
+    cudnn_benchmark: null
+execution:
+  storage:
+    output_root: runs
+    checkpoint_root: null
+    result_root: null
+    log_root: null
+    data_root: data
+    split_file: null
+  num_workers: 8
+  device: cuda
+  slurm:
+    partition: dgxh
+    account: null
+    gpus: 1
+    cpus: 8
+    memory_gb: 32
+    wall_time: "12:00:00"
+    max_concurrent: 4

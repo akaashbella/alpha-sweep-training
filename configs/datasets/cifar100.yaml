@@ -1,0 +1,12 @@
+schema_version: 1
+scientific:
+  dataset: cifar100
+  model:
+    num_classes: 100
+  data:
+    normalization:
+      mean: null
+      std: null
+      source: null
+    split:
+      identity: null

@@ -1,0 +1,11 @@
+schema_version: 1
+scientific:
+  architecture: efficientnet_b0
+  optimizer:
+    name: rmsprop
+    learning_rate: 0.01
+    momentum: 0.9
+    weight_decay: 0.00001
+    rmsprop_alpha: 0.9
+    epsilon: 0.001
+    betas: null

@@ -1,0 +1,11 @@
+schema_version: 1
+scientific:
+  architecture: convnext_tiny
+  optimizer:
+    name: adamw
+    learning_rate: 0.001
+    momentum: null
+    weight_decay: 0.05
+    rmsprop_alpha: null
+    epsilon: null
+    betas: [0.9, 0.999]
