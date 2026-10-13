@@ -116,7 +116,7 @@ def _legacy_clean(inputs, actual_provenance):
 
 def execute_evaluation(manifest, task, *, base_dir, source_root, overrides=None, evaluation_root=None,
                        evaluation_alphas=None, evaluation_replicates=None, retry_failed=False,
-                       reuse_legacy_clean=False, stop=None) -> EvaluationOutcome:
+                       reuse_legacy_clean=False, stop=None, expected_binding=None) -> EvaluationOutcome:
     """Run selected missing slots, skip verified successes, restart partial passes.
 
     Exactly one checkpoint/process/GPU, optionally a group of realizations. Never
@@ -134,6 +134,8 @@ def execute_evaluation(manifest, task, *, base_dir, source_root, overrides=None,
         raise EvaluationProtocolError("Evaluation stop must be the existing StopRequest")
     stop = stop if stop is not None else StopRequest()
     inputs = bind_evaluation_checkpoint(selected, base_dir=base_dir, overrides=overrides)
+    if expected_binding is not None:
+        same(inputs.binding, expected_binding, "immutable allocation best-checkpoint/protocol binding")
     provenance = collect_provenance(source_root, attempt={"lifecycle": "evaluation", "training_run_id": selected.run_id,
         "grid_id": manifest.grid_id, "evaluation_protocol_fingerprint": inputs.protocol.fingerprint,
         "best_checkpoint_identity": inputs.binding["best_checkpoint_identity"]})

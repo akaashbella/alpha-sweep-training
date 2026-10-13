@@ -134,6 +134,8 @@ class EvaluationView(_NormalizedView):
 
 def _initialize_worker(worker_id: int) -> None:
     """Initialize worker-only incidental RNGs once; sample choices never use them."""
+    from .allocation_signals import configure_data_worker_signals
+    configure_data_worker_signals()
     info = get_worker_info()
     if info is None:
         return

@@ -277,7 +277,7 @@ class EvaluationLease:
 
 
 @contextmanager
-def _exclusive_lock(path, owner, *, defer_sweep_contention=False):
+def _exclusive_lock(path, owner, *, defer_sweep_contention=False, atomic_owner=False, contention=None):
     if _is_link(path):
         fail("Linked evaluation lock requires manual review")
     token = uuid.uuid4().hex
@@ -285,20 +285,24 @@ def _exclusive_lock(path, owner, *, defer_sweep_contention=False):
                 "pid": os.getpid(), "created_at_utc": datetime.now(timezone.utc).isoformat()}
     acquired, staging = False, None
     try:
-        if defer_sweep_contention:
+        if defer_sweep_contention or atomic_owner:
             # Publish complete sweep ownership atomically: another finalizer
             # must never observe our just-created empty/partially written lock.
             candidate = path.with_name(f"{path.name}.{token}.acquire.json")
             if candidate.exists() or _is_link(candidate):
-                fail("Sweep lock staging path already exists; preserve it")
+                fail("Atomic lock staging path already exists; preserve it")
             atomic_write_json(candidate, document)
             staging = candidate
             try:
                 os.link(staging, path)  # Exclusive, same-directory atomic creation.
             except FileExistsError as exc:
-                inspect_sweep_lock(path, owner["binding_sha256"])
-                # A released-lock race also defers; no stealing/acquisition retry.
-                raise SweepFinalizationDeferred(path) from exc
+                if defer_sweep_contention:
+                    inspect_sweep_lock(path, owner["binding_sha256"])
+                    # A released-lock race also defers; no stealing/acquisition retry.
+                    raise SweepFinalizationDeferred(path) from exc
+                if contention is not None:
+                    contention(path, owner)
+                fail(f"Evaluation/operational lock exists: {path}; never steal by PID/age")
             acquired = True
         else:
             try:
@@ -312,6 +316,11 @@ def _exclusive_lock(path, owner, *, defer_sweep_contention=False):
                 stream.flush()
                 os.fsync(stream.fileno())
         fsync_directory(path.parent)
+        if staging is not None:
+            same(read_json(staging), document, "owned atomic lock staging before entry")
+            staging.unlink()
+            staging = None
+            fsync_directory(path.parent)
         yield
     finally:
         if acquired and path.is_file() and not _is_link(path):
@@ -323,7 +332,7 @@ def _exclusive_lock(path, owner, *, defer_sweep_contention=False):
                 path.unlink()
                 fsync_directory(path.parent)
         if staging is not None and staging.is_file() and not _is_link(staging):
-            same(read_json(staging), document, "owned sweep lock staging")
+            same(read_json(staging), document, "owned atomic lock staging")
             staging.unlink()
             fsync_directory(staging.parent)
 
