@@ -1,6 +1,9 @@
-schema_version: 2
+schema_version: 3
 scientific:
   architecture: resnet50
+  model:
+    builder_version: torchvision-cifar-builders-v1
+    initialization_version: sha256-isolated-cpu-float32-v1
   optimizer:
     name: sgd
     learning_rate: 0.1

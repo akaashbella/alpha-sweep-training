@@ -1,6 +1,6 @@
 # Development declaration for main-v1, never a smoke/reduced-budget configuration.
 # null means unresolved and blocks research execution, not a runtime default.
-schema_version: 2
+schema_version: 3
 scientific:
   specification_version: main-v1
   dataset: cifar10
@@ -8,6 +8,9 @@ scientific:
   alpha: 0
   training_seed: null
   training_seeds: null
+  model:
+    builder_version: torchvision-cifar-builders-v1
+    initialization_version: sha256-isolated-cpu-float32-v1
   data:
     preprocessing_version: cifar32-zero-pad4-flip05-float32-v1
     randomness_version: sha256-keyed-torch-cpu-v1
@@ -18,6 +21,7 @@ scientific:
       std: null
       source: null
   training:
+    scheduler_version: completed-units-linear-cosine-v1
     drop_last: null
     warmup_start_factor: null
     cosine_min_lr: null
