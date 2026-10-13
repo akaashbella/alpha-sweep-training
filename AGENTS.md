@@ -7,6 +7,7 @@ Implemented dataset/preparation contracts are in [docs/datasets.md](docs/dataset
 Implemented model/optimizer/scheduler contracts are in [docs/models-and-optimization.md](docs/models-and-optimization.md).
 Implemented training/perturbation/evaluation and Step 5 service contracts are in [docs/training-and-perturbation.md](docs/training-and-perturbation.md).
 Implemented durable checkpoint/continuation/recovery contracts are in [docs/checkpoints-and-recovery.md](docs/checkpoints-and-recovery.md).
+Implemented manifest/controller/provenance/coverage contracts are in [docs/manifests-and-controller.md](docs/manifests-and-controller.md).
 
 ## Implementation-only workflow
 
@@ -128,7 +129,20 @@ datasets, and fine sweeps are outside the main scope. Do not add them implicitly
 - StopRequest requests finish/discard without signal registration or handler I/O.
   Stale locks require exact ownership evidence and explicit confirmation that all
   recorded owners/allocations are inactive across nodes. Never infer this from
-  local PID or age. Step 5 stops before manifests/controllers/launchers and Slurm.
+  local PID or age. Step 6 connects the controller; Step 7 owns Slurm/signals.
+- Manifest construction uses prepared dataset bases, then architecture declarations
+  and typed task settings; never overlay raw pending dataset declarations. Validate
+  the exact full Cartesian product and linked phase views. Keep grid identity
+  separate from full-document integrity and permit execution-only task overrides.
+- One-task execution uses stored-state preflight before compute, original builders,
+  full ContinuationPlan and the existing lease. Auto dispatch blocks numerical and
+  execution failures; explicit continue authorizes only execution failure retry.
+  Publication recovery and exact selected archival overwrite remain separate.
+- Coverage joins every expected identity to journal authority. Keep stored status
+  separate from locks/partial/incompatible/corrupt/unstable/inspection conditions;
+  never infer completion from derived summaries or an allocation ending.
+  Source-only Step 6 work stops before Slurm submission, signal registration,
+  requeue/resubmission and cluster concurrency orchestration.
 
 ## HPC constraints
 

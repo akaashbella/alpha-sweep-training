@@ -3,16 +3,17 @@
 Research implementation for how **training-time Gaussian weight perturbation**
 affects final **clean classification performance** across CNN architectures.
 
-Steps 1–5 implement the scientific specification, strict configuration,
+Steps 1–6 implement the scientific specification, strict configuration,
 scientific run identity, safe artifact initialization, shared CIFAR preparation,
 reproducible full-set loaders, all four scratch CIFAR model builders, eligible
 weight discovery, fixed optimizers, the original-budget warmup/cosine scheduler,
 shared training, functional weight perturbation, clean evaluation, runtime RNG/
 precision policy, metrics, numerical-failure handling, restricted durable
-checkpoints, complete continuation and coordinated publication/recovery.
+checkpoints, complete continuation and coordinated publication/recovery,
+strict full-grid manifests, one-task execution and read-only coverage.
 These implementations **have not been executed or runtime-verified**.
-Sweep controllers/manifests, launchers, Slurm submission and reporting remain
-later steps; there is no runnable training command.
+Slurm submission/signal orchestration and reporting remain later steps.
+Production commands are implemented for later authorized HPC use only.
 
 The main grid contains 240 research runs: CIFAR-10 then CIFAR-100, four
 architectures, ten alphas, three training seeds; each run uses 200 epochs and
@@ -51,6 +52,13 @@ the concrete persistence service, durable initial boundary, authoritative HEAD,
 bounded role retention, preflight/restoration, stop requests and conservative
 recovery. The [progress note](docs/step5-progress.md) records source-only completion.
 
+The [manifest/controller guide](docs/manifests-and-controller.md) documents
+`alpha-sweep build`, `inspect`, `select`, `run` and `status`: finalized input
+layering, exact 240-task identities/two 120-task views, safe one-task dispatch,
+execution provenance, coverage, outcomes and the Step 7 handoff. No manifests
+were generated. Scientific settings in the development declaration remain pending.
+The [Step 6 progress note](docs/step6-progress.md) records source review only.
+
 The [implementation plan](docs/implementation-plan.md) defines shared interfaces,
-checkpoint/result metadata, completion criteria, and remaining Steps 6–9. The
+checkpoint/result metadata, completion criteria, and remaining Steps 7–9. The
 [HPC design](docs/hpc-design.md) preserves OSU `dgxh` execution requirements.

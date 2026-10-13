@@ -226,5 +226,7 @@ Step 4 implements functional perturbation, runtime RNG/precision setup, shared
 training, clean evaluation, metrics, layer statistics and explicit failures.
 It retains the original optimizer/model ownership and scheduling contract above.
 Step 5 provides the concrete persistence service, full preflight/restoration and
-durable initial/epoch boundaries. Controllers, submissions, reporting and HPC runtime
-checks remain later steps.
+durable initial/epoch boundaries. Step 6's
+[controller](manifests-and-controller.md) now connects one selected task using these
+builders, explicit fresh/continuation initialization and actual loader counts.
+Slurm/signals, reporting and HPC runtime checks remain later steps.

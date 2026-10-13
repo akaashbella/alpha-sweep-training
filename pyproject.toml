@@ -16,6 +16,7 @@ dependencies = [
 
 [project.scripts]
 alpha-sweep-prepare = "alpha_sweep_training.prepare:main"
+alpha-sweep = "alpha_sweep_training.controller:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

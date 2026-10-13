@@ -1,17 +1,19 @@
 # Shared contracts and remaining implementation steps
 
-Steps 1–5 implement configuration, identity, finite atomic serialization,
+Steps 1–6 implement configuration, identity, finite atomic serialization,
 provenance validation, guarded run initialization, full official CIFAR preparation,
 reproducible loaders, all four scratch CIFAR models, owned eligible-weight
 inventory, fixed optimizers, the original-budget scheduler, shared training,
 functional perturbation, clean evaluation, RNG/precision policy, typed metrics
 and numerical failures, restricted durable checkpoints, full continuation,
-coordinated publication/recovery and stop requests. These sources have not been
-executed or runtime-verified. Controllers, launchers, Slurm and reporting remain
-future work. There is no runnable training command. See
+coordinated publication/recovery, stop requests, full manifests, one-task execution
+and complete read-only coverage. These sources have not been
+executed or runtime-verified. Slurm/signal orchestration and reporting remain
+future work. Production controller commands are for later HPC use. See
 [models-and-optimization.md](models-and-optimization.md) and
 [training-and-perturbation.md](training-and-perturbation.md) and
 [checkpoints-and-recovery.md](checkpoints-and-recovery.md) for implemented contracts.
+Step 6 interfaces are in [manifests-and-controller.md](manifests-and-controller.md).
 
 ## Responsibilities and interfaces
 
@@ -29,7 +31,9 @@ future work. There is no runnable training command. See
 | Records | Typed epochs/test/failures/statistics, finite JSON envelopes, epoch/layer CSV renderers and guarded diagnostic JSONL append | 4 implemented |
 | Checkpoint/continuation | DurableTrainingPersistence(run): commit_initial, commit_epoch, load_best, publish_completion, publish_failure; ContinuationPlan preflight/restore → ContinuationState | 5 implemented |
 | Recovery/interruption | inspect_completion, recovery_diagnostics, explicit recover publication/numerical evidence and confirmed lock recovery; StopRequest finish/discard | 5 implemented; signal registration/orchestration later |
-| Manifest/task selection | build_manifest(finalized dataset configs, seed plan) → 240 uniquely identified scientific tasks; select_task(manifest, task index/run ID) → one ready RunConfig | 6 |
+| Manifest/task selection | build_manifest(dataset_configs, model_declarations, seeds, base_dir) → strict 240-task Manifest; load_manifest/load_phase/select_task/task_config → validated Task/config with execution-only overrides | 6 implemented |
+| One-task execution | execute_task(manifest, task, base_dir, source_root, operation, overrides, stop) → TaskOutcome/ExitCode through existing engine, lease and continuation plan | 6 implemented |
+| Coverage/provenance | inspect_task/collect_coverage → complete identity join and phase eligibility; collect_provenance → actual future execution source/software/allocation record | 6 implemented |
 | Slurm submission | render_submission(manifest, selected tasks, execution policy) → reviewable dgxh submission sources; later submit only in authorized execution workflow | 7 |
 | Aggregation | collect_results(manifest) → every individual seed row and explicit completion/failure coverage; validation-selected alpha plus supporting mean/std | 8 |
 | Plotting | plot_results(aggregate) → shareable figures with seed observations visible, uncertainty convention and missing/failure annotations | 8 |
@@ -200,7 +204,7 @@ complete three-seed set. Specify cross-seed std convention and how exact
 validation-mean ties are reported before generating final aggregates. Report
 test results for every alpha/seed, not only the selected alpha.
 
-## Steps 2–5 completed in source; remaining steps in order
+## Steps 2–6 completed in source; remaining steps in order
 
 2. **Dataset preparation and reproducibility (implemented, execution deferred).** Official dataset integrity,
    persistent fixed splits, finalized normalization, seeding/augmentation
@@ -217,9 +221,11 @@ test results for every alpha/seed, not only the selected alpha.
    durable initial boundary, coordinated single-point transactions, bounded
    retention, stop requests, evaluation-only continuation, read-only completion
    inspection and conservative artifact/lock recovery.
-6. **Full experiment controller and manifests.** Finalized 240-run grid, unique
+6. **Full experiment controller and manifests (implemented, execution deferred).** Finalized 240-run grid, unique
    per-run configs/identities, one-task selection, coverage/status tracking,
-   fixed recipes/decisions across alphas/seeds, and two 120-run dataset manifests.
+   fixed recipes/decisions across alphas/seeds, and two 120-run linked phase views;
+   safe one-task execution, actual provenance collection and strict failure/ownership
+   dispatch. No actual manifests generated; scientific inputs remain pending.
 7. **OSU dgxh execution.** One process/GPU per run, configurable allocation
    policy, persistent shared paths, compatible continuation across allocations,
    global concurrency control, and reviewable operational submission sources.
@@ -232,5 +238,5 @@ test results for every alpha/seed, not only the selected alpha.
 
 Each implementation step ends with source and Git-diff inspection, not executable
 verification. Do not create tests, smoke configs, demonstrations, preliminary
-experiments, or placeholder modules. Step 5 stops before Step 6 controllers/manifests
-and Step 7 Slurm/signal orchestration.
+experiments, or placeholder modules. Step 6 stops before Step 7 Slurm/signal
+orchestration, requeue/resubmission and cluster concurrency control.

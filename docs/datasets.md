@@ -16,6 +16,9 @@ deferred to authorized HPC work after all nine implementation steps.
   same explicit preparation CLI for one selected dataset.
 - `prepared.load_prepared_dataset(config, base_dir=...)` validates completed
   artifacts and current official sources without writing or downloading.
+- Its Step 6 `metadata_only=True` mode validates the same prepared bundle and
+  official raw-file checksums/descriptors without constructing image-array sources.
+  Manifest construction uses it; full loaders retain decoded identity validation.
 - `data.build_loaders(config, base_dir=..., pin_memory=False,
   persistent_workers=False)` returns `DataLoaders` with `train`, `validation`,
   `test`, typed `metadata`, `set_epoch`, `continuation_metadata`, and

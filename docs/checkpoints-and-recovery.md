@@ -3,8 +3,9 @@
 Step 5 is implemented in source only. No project imports/execution, model
 construction, tests, compilation, linting, training/evaluation, installations,
 downloads, artifact generation, experiments or jobs were performed. Runtime
-correctness remains unverified. There is no training launcher, manifest/controller,
-signal registration, Slurm submission, requeue or automatic retry implementation.
+correctness remains unverified. Step 6 connects the training launcher and
+[manifest/controller](manifests-and-controller.md). Signal registration, Slurm
+submission, requeue and automatic retry remain unimplemented.
 
 ## Interfaces and scope
 
@@ -212,6 +213,14 @@ test/summary/CSV content. Epoch 200 alone remains `trained_pending_test`.
 changing files or acquiring writer locks. Partial/corrupt/incompatible existing
 state raises rather than masquerading as a missing task. Concurrent mutation can
 cause a conservative read failure; inspect again after the writer exits.
+Step 6 removes derived-summary validation from the ownership gate: malformed
+aliases cannot veto valid immutable HEAD completion or explicit repair. The
+original configuration/root markers and immutable authoritative results still
+must validate. Execution-failure evidence at the latest training boundary also
+blocks automatic controller continuation; historical evidence is preserved.
+`ContinuationPlan(..., allow_execution_failure=False)` repeats this automatic
+dispatch gate before and under the original locks. Existing explicit continuation
+callers retain the default True; terminal numerical evidence is always rejected.
 
 Failure/interruption records preserve observed versus acknowledged versus actual
 committed progress, location, reason/type/tensors, transaction outcome and attempt

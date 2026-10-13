@@ -52,10 +52,27 @@ and a valid final result summary. Numerical failure must remain visible to
 controller and aggregation. See [the shared contracts](implementation-plan.md).
 
 Step 5's [checkpoint/recovery APIs](checkpoints-and-recovery.md) are implemented
-without execution. Future launchers/controllers must use full continuation
+without execution. The Step 6 launcher/controller uses full continuation
 preflight, read-only committed completion inspection and the active run lease.
 Future signal handlers request StopRequest finish/discard; they perform no
 serialization. Stale locks require explicit confirmation of inactive owners
 across nodes, never local PID/age guesses. Numerical failure is terminal, and
 lost completion acknowledgement must be reconciled before any rerun/resubmission.
-No manifest/controller/launcher or Slurm scripts are implemented in Step 5.
+Step 6's [manifest/controller guide](manifests-and-controller.md) documents
+`alpha-sweep` commands and `load_manifest`, `load_phase`, `select_task`,
+`inspect_task`, `collect_coverage`, `dispatch`, `execute_task`, TaskOutcome/ExitCode.
+Each task command handles one process/GPU; phase scheduling is a Step 7 responsibility.
+Coverage includes every seed and a conservative phase-2 eligibility flag requiring
+all phase-1 tasks successfully complete. Settled terminal numerical failures remain
+distinct and do not silently unlock the next phase. Automatic candidates exclude
+execution/numerical failures and unsafe inspection conditions.
+
+Use a fixed actually imported checkout and persistent base/storage across
+allocations. The execution collector records actual dependencies/source and
+allowlisted allocation environment without Slurm commands; the runtime records
+actual assigned-device/backend details. Status probes no GPU and validates saved
+authority using historical provenance. It is a read-only set of individual
+observations, not an atomic grid snapshot. Retain unsuccessful CLI outcomes when
+failure publication was unavailable. Exit codes and ended allocations alone cannot
+prove completion. No Slurm scripts, signal registration or retry loops are
+implemented; account/resource entitlement checks still belong to future operation.

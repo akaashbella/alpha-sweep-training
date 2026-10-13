@@ -6,7 +6,8 @@ artifacts, experiments or jobs were executed to verify it. Runtime correctness
 remains unverified until the authorized OSU HPC work after all nine steps.
 Checkpoint persistence/recovery is implemented in Step 5's
 [checkpoint guide](checkpoints-and-recovery.md). The concrete service must be
-supplied explicitly; no training CLI or implicit persistence bypass is supplied.
+supplied explicitly; Step 6's [controller](manifests-and-controller.md) now connects
+one selected task without an implicit persistence bypass.
 
 ## Interfaces and construction order
 
@@ -296,7 +297,8 @@ receives full clean test evaluation; only `publish_completion` can authorize a
 `completed` result. Continuation at count 200 executes no training epochs and takes
 the same test/publication path. Step 5 supplies checkpoint files, restoration,
 publication repair, conservative lock recovery and finish/discard stop requests.
-Slurm orchestration and runnable training commands remain later steps.
+Step 6 connects runnable production task commands in source; Slurm/signal
+orchestration remains Step 7.
 
 ## Decisions and versions
 

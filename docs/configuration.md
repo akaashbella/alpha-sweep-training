@@ -145,7 +145,9 @@ are recorded separately from declarations; no pending field is resolved silently
 `train_run` additionally requires full research readiness, original-budget
 components, an active `open_run` handle and Step 5's `TrainingPersistence` service.
 The compute and recording interfaces are described in
-[training-and-perturbation.md](training-and-perturbation.md). There is no training CLI.
+[training-and-perturbation.md](training-and-perturbation.md). Step 6's
+[controller](manifests-and-controller.md) supplies the one-task production CLI,
+implemented without execution.
 
 ## Scientific identity and provenance
 
@@ -168,11 +170,13 @@ Slurm IDs, timestamps, and code/software provenance. A version or scientific
 change therefore prevents compatible reuse despite an unchanged human name.
 
 Code/software provenance is a separate JSON record. `software_provenance`
-requires actual commit (or null), dirty flag, source-snapshot SHA-256, Python,
+requires actual commit (or null), dirty flag (or null with an explicit
+Git-unavailable reason), source-snapshot SHA-256, Python,
 torch, torchvision, CUDA and cuDNN versions; allocation metadata/timestamps are
-operational. Later launchers compute the digest of the source actually executed
-and record hardware/environment details. Step 1 does not execute environment
-probes or implement source snapshot collection. The source digest must include
+operational. Step 6 implements future execution collection of the source actually
+imported, actual dependencies and allocation environment; runtime policy supplies
+hardware details. No environment probes or provenance collection were executed
+during implementation. The source digest must include
 execution source/config-contract files and exclude datasets/output artifacts.
 
 Before continuation, compare marker versions, full run ID, full scientific
@@ -255,7 +259,11 @@ Step 5 implements restricted checkpoint files, full restoration and durable
 completion/failure publication with one metadata HEAD commit point. Its storage
 versions leave scientific schema/fingerprint 4 unchanged. See
 [checkpoints-and-recovery.md](checkpoints-and-recovery.md). Training launchers,
-manifest expansion and Slurm remain later steps.
+manifest expansion are now connected by Step 6; Slurm remains Step 7. The
+[manifest/controller guide](manifests-and-controller.md) specifies finalized-base
+layering, strict full/phase documents, selectors, exact execution override fields,
+provenance inventory, typed outcomes and read-only coverage. Generating a manifest
+does not resolve any pending decision in the checked-in declarations.
 
 ## Prepared dataset configurations
 
