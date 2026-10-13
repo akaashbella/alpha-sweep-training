@@ -3,6 +3,7 @@
 The authoritative scientific specification is [docs/scientific-specification.md](docs/scientific-specification.md).
 The shared contracts and ordered remaining steps are in [docs/implementation-plan.md](docs/implementation-plan.md).
 Configuration semantics and unresolved decisions are in [docs/configuration.md](docs/configuration.md).
+Implemented dataset/preparation contracts are in [docs/datasets.md](docs/datasets.md).
 
 ## Implementation-only workflow
 
@@ -13,6 +14,8 @@ and reuse useful source. During all nine implementation steps:
 - Do not run tests, training, evaluation, benchmarks, synthetic experiments, or smoke runs.
 - Do not create tests, smoke configurations, reduced-data experiments, or demonstration notebooks.
 - Do not install packages, download datasets, submit HPC jobs, or execute project code.
+- Do not generate dataset artifacts now. Preparation commands are implemented
+  for later authorized HPC execution; production artifact checks are source work.
 - Do not run compilation, linting, or executable verification commands.
 - Read source, search files, inspect Git status/diffs, and edit files only.
 - Existing tests/smoke files may remain inactive; do not expand or maintain them.
@@ -81,6 +84,15 @@ datasets, and fine sweeps are outside the main scope. Do not add them implicitly
   prescribed clean test evaluation and final result artifacts are also required.
 - Implement only the requested step. Document later interfaces; do not add empty
   modules that imply future functionality already exists.
+- Shared preparation uses its own dataset lock and final manifest, never
+  `open_run`. Loaders must be read-only: no download, split generation,
+  normalization derivation, or automatic repair. Normalization and the split
+  preparation seed have no scientific defaults.
+- The fixed data contract uses constant-zero padding 4, random 32×32 crops,
+  horizontal flips with probability 0.5, CPU float32 CHW tensors on [0,1], and
+  normalization. Evaluation has no random augmentation or resize. Versioned
+  local order/augmentation streams exclude architecture/alpha and carry epoch
+  in sampler keys, including for persistent workers.
 
 ## HPC constraints
 

@@ -6,8 +6,16 @@ build-backend = "setuptools.build_meta"
 name = "alpha-sweep-training"
 version = "0.1.0"
 description = "Training-time Gaussian weight perturbation experiments on CIFAR"
-requires-python = ">=3.10"
-dependencies = ["PyYAML>=6.0"]
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "PyYAML>=6.0",
+    "torch==2.5.1",
+    "torchvision==0.20.1",
+    "numpy==1.26.4",
+]
+
+[project.scripts]
+alpha-sweep-prepare = "alpha_sweep_training.prepare:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
