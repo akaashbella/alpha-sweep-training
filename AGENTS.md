@@ -4,6 +4,7 @@ The authoritative scientific specification is [docs/scientific-specification.md]
 The shared contracts and ordered remaining steps are in [docs/implementation-plan.md](docs/implementation-plan.md).
 Configuration semantics and unresolved decisions are in [docs/configuration.md](docs/configuration.md).
 Implemented dataset/preparation contracts are in [docs/datasets.md](docs/datasets.md).
+Implemented model/optimizer/scheduler contracts are in [docs/models-and-optimization.md](docs/models-and-optimization.md).
 
 ## Implementation-only workflow
 
@@ -93,6 +94,14 @@ datasets, and fine sweeps are outside the main scope. Do not add them implicitly
   normalization. Evaluation has no random augmentation or resize. Versioned
   local order/augmentation streams exclude architecture/alpha and carry epoch
   in sampler keys, including for persistent workers.
+- Models initialize serially in an isolated CPU float32 RNG context independent
+  of alpha. Use the authoritative owned Conv2d/Linear inventory in `weights.py`.
+  Move clean models to the final device before optimizer construction; preserve
+  one fixed parameter group including bias/normalization weight decay.
+- Scheduler position counts completed cadence units, with the full original
+  horizon. AMP-skipped updates do not advance optimizer-step cadence. Restore
+  with `initialize=False`, optimizer state first and scheduler state afterward;
+  completed epochs and successful optimizer updates remain separate counters.
 
 ## HPC constraints
 
