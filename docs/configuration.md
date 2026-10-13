@@ -1,0 +1,193 @@
+# Configuration, identity, and artifact ownership
+
+## Schema and current scope
+
+`schema_version: 1` describes the file structure; `scientific.specification_version:
+main-v1` describes the experiment. The effective document has exactly three top
+keys: `schema_version`, `scientific`, `execution`. No arbitrary extra settings,
+unknown names, duplicate YAML keys, non-string mapping keys, YAML merge keys,
+or bool-as-integer coercion are accepted. Numeric strings are not numbers.
+Configuration validation does not import torch or check whether a builder exists.
+
+`spec.py` centrally defines datasets/class counts, architecture names, ten
+approved alphas, training/split sizes, and all optimizer recipes. `config.py`
+implements strict schema validation, layering, and a separate research-readiness
+gate. `RunConfig.scientific`, `.execution`, and `.to_dict()` return defensive
+copies. Direct `RunConfig(document)` requires the full schema;
+`from_declaration(...)` and `load_config(...)` accept partial declarations.
+
+The schema rejects negative/NaN/infinite alpha and alpha outside the approved
+main grid. It enforces classifier/dataset agreement, scratch initialization,
+all fixed optimizer fields (inactive fields must be null), 200 epochs, batch
+size 128, five warmup epochs, full dataset sizes, transforms, and the approved
+perturbation/evaluation contract. There is no subset or reduced-budget option.
+Finalized normalization requires three finite RGB means and three positive
+finite RGB standard deviations plus a nonempty source/derivation identity.
+
+## Precedence and serialization
+
+`load_config(base_path, dataset_path=None, model_path=None, overrides=None)`
+applies these layers in increasing precedence:
+
+1. Central defaults derived from the **final selected** dataset and architecture.
+2. Base YAML (`configs/research.yaml`); it must declare schema_version.
+3. Optional dataset YAML (`configs/datasets/cifar10.yaml` or `cifar100.yaml`).
+4. Optional model YAML (one of the four declarations in `configs/models/`).
+5. Typed CLI override mapping, keyed by full dotted field paths such as
+   `scientific.alpha` and `execution.storage.output_root`.
+
+This is a small loader API, not a CLI or general-purpose configuration framework.
+A future CLI must parse arguments into actual numeric/bool values before passing
+overrides; strings must not bypass type checking. Layers cannot replace mappings
+with scalars. Unknown keys and invalid types are rejected in every layer. Explicit values retain
+precedence even when selectors change: switching a fully resolved CIFAR-10
+config to CIFAR-100 requires changing its explicit classifier. Supply the correct
+normalization/split identity for that dataset; Step 2 verifies their artifact
+association. Switching an explicit model recipe requires an
+appropriate model layer or explicit compatible fields. Incompatible fields are
+rejected rather than silently reset. Dataset/model files are applied only when
+requested; their filenames are not interpreted as settings.
+
+`save_resolved_config(path, config)` writes the complete effective document in
+the **same** schema that `load_config` accepts. It introduces no `paths`,
+`resolved`, identity, or provenance wrapper into that YAML. Effective execution
+overrides are retained. `open_run` converts storage paths to absolute paths
+against its explicitly supplied `base_dir` before saving, so the file can be
+loaded later from a different working directory. A saved complete YAML can be
+used as the next base without a dataset/model layer.
+
+## Central pending-decision register
+
+No prior source or instructions existed in this working tree to establish these
+choices. `configs/research.yaml` centrally lists pending fields as `null`; the
+dataset declarations keep each dataset's normalization/split decision separate.
+Null means unresolved, never "use library/default/smoke value."
+
+| Decision | Schema fields | Required finalization |
+| --- | --- | --- |
+| Exact three training seeds | scientific.training_seeds | Three distinct unsigned 32-bit integers; shared across alpha values and architectures |
+| Selected task seed | scientific.training_seed | One of the finalized three seeds; task selection belongs to Step 6 |
+| Dataset normalization | scientific.data.normalization.mean / std / source | Final constants and source, or an approved derivation policy that Step 2 resolves to constants/source before execution |
+| Final incomplete training batch | scientific.training.drop_last | Explicit true or false; validation/test always retain all examples |
+| Precision | scientific.precision.mode | float32, amp_float16, or amp_bfloat16 |
+| Backend/determinism | scientific.precision.float32_matmul_precision / allow_tf32 / deterministic_algorithms / cudnn_deterministic / cudnn_benchmark | Explicit supported string/bools; allow_tf32 controls both CUDA matmul and cuDNN TF32 |
+| Persisted split identity | scientific.data.split.identity | Step 2-generated sha256 identity of the actual ordered training/validation indices and dataset |
+| Warmup endpoints | scientific.training.warmup_start_factor | Explicit factor in [0,1] relative to the architecture's base LR |
+| Cosine endpoint | scientific.training.cosine_min_lr | Explicit finite LR between zero and the architecture's base LR |
+| Scheduler cadence | scientific.training.scheduler_interval | epoch or optimizer_step, with the exact indexing equation documented in Step 3 |
+
+The last four rows are necessary to avoid inventing unspecified split/scheduler
+details. There is no provisional split seed, guessed normalization, training
+seed list, precision, batch policy, or warmup/cosine endpoint. A split's identity
+is supplied by dataset preparation, not chosen by the training seed. A derivation
+policy written in normalization.source alone does not resolve missing constants.
+
+Partial decisions are valid during development. `unresolved_settings()` lists
+the exact pending field paths. `require_research_ready()` raises
+`UnresolvedConfigError` with all missing fields. Every future launcher/controller
+must call it before initializing a run, launching training, or submitting a
+research task. Artifact initialization and scientific hashing already call it.
+Resolved settings must stay fixed across alphas/seeds for a given architecture
+and dataset; Step 6 must also check that grid-wide consistency.
+
+Operational `slurm.account` and `storage.split_file` have no invented values.
+Step 7 validates the chosen account and resources before submission. Step 2
+validates dataset files and the actual split artifact before loading. These
+operational checks are separate from scientific readiness.
+
+## Scientific identity and provenance
+
+Human-readable run IDs have the form
+`cifar10__resnet50__alpha-0.1__seed-<finalized-integer>`.
+`canonical_alpha` expands the shortest numeric representation without decimal
+rounding: 0.10 and 0.1 map to `0.1`, 1 and 1.00 to `1`, and signed zero to `0`.
+All ten approved values remain distinct. Numeric strings are rejected.
+
+`scientific_fingerprint` returns a full SHA-256 hex digest of sorted canonical
+finite JSON containing fingerprint version 1, schema version 1, and the entire
+effective scientific section. It includes selected seed, the three-seed plan,
+dataset/model, alpha, full training/optimizer/perturbation/evaluation settings,
+split hash, normalization identity/constants, and resolved precision/backend
+policy. Fixed numeric values and alpha are normalized on validation. It excludes
+all execution paths, worker/CPU/RAM requests, allocation wall time, account,
+Slurm IDs, timestamps, and code/software provenance. A version or scientific
+change therefore prevents compatible reuse despite an unchanged human name.
+
+Code/software provenance is a separate JSON record. `software_provenance`
+requires actual commit (or null), dirty flag, source-snapshot SHA-256, Python,
+torch, torchvision, CUDA and cuDNN versions; allocation metadata/timestamps are
+operational. Later launchers compute the digest of the source actually executed
+and record hardware/environment details. Step 1 does not execute environment
+probes or implement source snapshot collection. The source digest must include
+execution source/config-contract files and exclude datasets/output artifacts.
+
+Before continuation, compare marker versions, full run ID, full scientific
+fingerprint, the fingerprint recomputed from saved YAML, and markers in every
+populated selected artifact directory. Checkpoint/result metadata must repeat
+these identities. `open_run` also currently requires the same source digest and
+software mapping; a reviewed code/software migration policy belongs to Step 5.
+Commit/allocation/storage changes alone do not change scientific identity.
+
+## Safe directories and writes
+
+`resolve_run_paths(config, base_dir)` returns `RunPaths(metadata, checkpoints,
+results, logs)`. Default layout is:
+
+```text
+<output_root>/<run_id>/
+  resolved_config.yaml
+  run_metadata.json
+  attempts/<unique-attempt-id>/resolved_config.yaml
+  attempts/<unique-attempt-id>/metadata.json
+  checkpoints/.run_owner.json
+  results/.run_owner.json
+  logs/.run_owner.json
+```
+
+Optional checkpoint/result/log roots use `<root>/<run_id>` instead. Distinct
+directories are required; overlapping directories other than direct children
+of metadata are rejected. Empty directories can be used for a new run, but any
+existing entry—including a configuration, checkpoint, log, temporary file, or
+subdirectory—protects the run regardless of `summary.json`.
+
+`open_run(config, base_dir=..., provenance=..., operation=...)` is a context
+manager. All run writers must hold its context for their complete access period.
+It preflights every selected directory, acquires exclusive cooperative locks at
+each independent storage root, repeats checks under locks, and then initializes
+configuration/metadata. Locks are outside the run directories and contain owner
+token, host, PID, time, and identity. Locks are never expired or stolen based on
+wall time. Inspect a stale lock's ownership and allocations before manual
+recovery. Readers and noncooperating external programs cannot be made safe by
+these cooperative locks.
+
+| Operation | Behavior |
+| --- | --- |
+| new (default) | Refuse any existing run artifacts; create fresh owner/config/metadata records |
+| continue | Require existing compatible metadata and resolved YAML, valid populated-directory owners, and matching provenance; preserve artifacts and add an attempt snapshot |
+| overwrite | Require an existing selected directory and the exact overwrite_run_id; archive all managed run directories beside their original locations with a unique suffix; initialize a new run |
+
+Continue refuses completion recorded in metadata or a summary. Missing/incomplete ownership
+or config records do not authorize reuse; stop for recovery or explicitly
+selected archived overwrite. A context exit does not mark a run completed.
+Initialization failure may leave an incomplete directory or a stale lock, which
+remains protected. Multi-directory archiving is not one filesystem transaction;
+failed moves attempt rollback and preserve old content. It never recursively
+deletes artifacts. Linked run directories/ownership/config files are rejected.
+
+Operational paths may change without changing a fingerprint. Continuing after
+relocation requires compatible metadata/config and any populated artifact
+directories to be copied/mounted at their selected new locations; Step 5 must
+check actual checkpoint availability before changing epoch state. These helpers
+do not copy runs or restore checkpoint contents.
+
+`atomic_write_text`, `atomic_write_json`, and `save_resolved_config` serialize to
+a temporary file in the target directory, flush/fsync it, then use `os.replace`;
+directory fsync is attempted on POSIX. Low-level atomic writing does not grant
+permission to replace run artifacts: callers first use the guarded run context.
+`strict_json_text` refuses nonfinite values; `read_json` also rejects duplicate
+keys, NaN/Infinity tokens, and overflowed numbers. Convert unavailable failed
+metrics to null only while recording explicit failure status/reason.
+
+The foundation does not implement checkpoint restoration, a training launcher,
+manifest expansion, or final result production. Their interfaces are defined in
+[the implementation plan](implementation-plan.md).
