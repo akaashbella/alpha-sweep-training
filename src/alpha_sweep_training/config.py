@@ -14,6 +14,7 @@ from typing import Any, Mapping
 from .spec import (
     ALPHAS, ARCHITECTURES, DATASETS, SCHEMA_VERSION, SEED_COUNT,
     PREPROCESSING_VERSION, DATA_RANDOMNESS_VERSION, default_document,
+    MODEL_BUILDER_VERSION, MODEL_INITIALIZATION_VERSION, SCHEDULER_VERSION,
 )
 
 
@@ -280,7 +281,7 @@ class RunConfig:
     __slots__ = ("_document",)
 
     def __init__(self, document: Mapping):
-        document = _migrate_v1(_mapping(document, "config"))
+        document = _migrate_declaration(_mapping(document, "config"))
         try:
             science = _mapping(document["scientific"], "scientific")
             dataset = _choice(science["dataset"], DATASETS, "scientific.dataset")
@@ -380,15 +381,15 @@ def _override_layer(overrides: Mapping[str, Any]) -> dict:
     return layer
 
 
-def _migrate_v1(document: Mapping) -> dict:
+def _migrate_declaration(document: Mapping) -> dict:
     """Explicit additive migration; never resolve a pending scientific decision.
 
-    Version 2 records preprocessing/randomness contracts and spells out tensor
-    conversion in the transform lists. All other fields stay unchanged and strict.
+    Version 1 -> 2 adds data contracts/explicit tensor conversion. Version 2 -> 3
+    adds builder/initialization/scheduler contracts. Pending choices stay pending.
     """
     result = deepcopy(dict(document))
     if type(result.get("schema_version")) is int and result["schema_version"] == 1:
-        result["schema_version"] = SCHEMA_VERSION
+        result["schema_version"] = 2
         if "scientific" in result:
             science = _mapping(result["scientific"], "scientific")
             if "data" in science:
@@ -402,6 +403,20 @@ def _migrate_v1(document: Mapping) -> dict:
                     data["evaluation_transforms"] = ["to_float32_chw_uint8_div_255", "normalize"]
                 science["data"] = data
             result["scientific"] = science
+    if type(result.get("schema_version")) is int and result["schema_version"] == 2:
+        result["schema_version"] = SCHEMA_VERSION
+        if "scientific" in result:
+            science = _mapping(result["scientific"], "scientific")
+            if "model" in science:
+                model = _mapping(science["model"], "scientific.model")
+                model.setdefault("builder_version", MODEL_BUILDER_VERSION)
+                model.setdefault("initialization_version", MODEL_INITIALIZATION_VERSION)
+                science["model"] = model
+            if "training" in science:
+                training = _mapping(science["training"], "scientific.training")
+                training.setdefault("scheduler_version", SCHEDULER_VERSION)
+                science["training"] = training
+            result["scientific"] = science
     return result
 
 
@@ -412,7 +427,7 @@ def from_declaration(*layers: Mapping, overrides: Mapping[str, Any] | None = Non
     never disappear when a selector changes; an incompatible recipe/classifier is
     rejected and must be overridden explicitly.
     """
-    declarations = [_migrate_v1(_mapping(layer, "declaration")) for layer in layers]
+    declarations = [_migrate_declaration(_mapping(layer, "declaration")) for layer in layers]
     if not declarations or "schema_version" not in declarations[0]:
         raise ConfigError("base declaration must contain schema_version")
     for layer in declarations:

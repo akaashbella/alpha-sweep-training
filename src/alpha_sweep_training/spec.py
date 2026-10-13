@@ -2,9 +2,16 @@
 
 from copy import deepcopy
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 SPECIFICATION_VERSION = "main-v1"
-FINGERPRINT_VERSION = 2
+FINGERPRINT_VERSION = 3
+MODEL_BUILDER_VERSION = "torchvision-cifar-builders-v1"
+MODEL_INITIALIZATION_VERSION = "sha256-isolated-cpu-float32-v1"
+ELIGIBLE_WEIGHT_VERSION = "conv2d-linear-owned-weights-v1"
+OPTIMIZER_BUILDER_VERSION = "single-group-native-recipe-v1"
+SCHEDULER_VERSION = "completed-units-linear-cosine-v1"
+PINNED_TORCH_VERSION = "2.5.1"
+PINNED_TORCHVISION_VERSION = "0.20.1"
 PREPROCESSING_VERSION = "cifar32-zero-pad4-flip05-float32-v1"
 DATA_RANDOMNESS_VERSION = "sha256-keyed-torch-cpu-v1"
 
@@ -80,11 +87,14 @@ def default_document(dataset: str, architecture: str) -> dict:
                 "evaluation_transforms": ["to_float32_chw_uint8_div_255", "normalize"],
             },
             "model": {
+                "builder_version": MODEL_BUILDER_VERSION,
+                "initialization_version": MODEL_INITIALIZATION_VERSION,
                 "num_classes": DATASETS[dataset], "pretrained": False,
                 "stem_policy": "cifar32", "preserve_remaining_structure": True,
             },
             "optimizer": optimizer_recipe(architecture),
             "training": {
+                "scheduler_version": SCHEDULER_VERSION,
                 "epochs": EPOCHS, "batch_size": BATCH_SIZE,
                 "loss": "cross_entropy", "warmup_epochs": WARMUP_EPOCHS,
                 "schedule": "linear_warmup_then_cosine",

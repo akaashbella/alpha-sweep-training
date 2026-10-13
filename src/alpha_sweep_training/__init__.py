@@ -1,7 +1,8 @@
-"""Configuration/artifact foundations and full CIFAR dataset implementation.
+"""Configuration/artifacts, CIFAR data, and model/optimization source interfaces.
 
-Dataset APIs live in data.py and prepare.py; compute dependencies are not imported
-by this initializer. Models, training, and experiment execution are later steps.
+Compute APIs live in data.py, prepare.py, models.py, weights.py, optimizers.py,
+and scheduler.py; compute dependencies are not imported by this initializer.
+Training, checkpoint files, and experiment execution remain later steps.
 """
 
 from .config import ConfigError, RunConfig, UnresolvedConfigError, load_config
