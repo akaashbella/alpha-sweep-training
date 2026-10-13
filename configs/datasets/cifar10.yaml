@@ -1,9 +1,11 @@
-schema_version: 1
+schema_version: 2
 scientific:
   dataset: cifar10
   model:
     num_classes: 10
   data:
+    preprocessing_version: cifar32-zero-pad4-flip05-float32-v1
+    randomness_version: sha256-keyed-torch-cpu-v1
     normalization:
       mean: null
       std: null
