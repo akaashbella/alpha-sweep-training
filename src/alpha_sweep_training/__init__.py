@@ -1,6 +1,7 @@
-"""Scientific configuration and artifact foundations for the alpha sweep.
+"""Configuration/artifact foundations and full CIFAR dataset implementation.
 
-Training, datasets, model builders, and experiment execution belong to later steps.
+Dataset APIs live in data.py and prepare.py; compute dependencies are not imported
+by this initializer. Models, training, and experiment execution are later steps.
 """
 
 from .config import ConfigError, RunConfig, UnresolvedConfigError, load_config

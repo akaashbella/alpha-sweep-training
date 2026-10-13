@@ -2,9 +2,11 @@
 
 from copy import deepcopy
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 SPECIFICATION_VERSION = "main-v1"
-FINGERPRINT_VERSION = 1
+FINGERPRINT_VERSION = 2
+PREPROCESSING_VERSION = "cifar32-zero-pad4-flip05-float32-v1"
+DATA_RANDOMNESS_VERSION = "sha256-keyed-torch-cpu-v1"
 
 DATASETS = {"cifar10": 10, "cifar100": 100}
 ARCHITECTURES = (
@@ -65,14 +67,17 @@ def default_document(dataset: str, architecture: str) -> dict:
             "training_seed": None,
             "training_seeds": None,
             "data": {
+                "preprocessing_version": PREPROCESSING_VERSION,
+                "randomness_version": DATA_RANDOMNESS_VERSION,
                 "image_size": 32,
                 "train_size": TRAIN_SIZE,
                 "validation_size": VALIDATION_SIZE,
                 "test_size": TEST_SIZE,
                 "split": {"policy": "persisted_official_train_indices", "identity": None},
                 "normalization": {"mean": None, "std": None, "source": None},
-                "training_transforms": ["random_crop_padding_4", "random_horizontal_flip", "normalize"],
-                "evaluation_transforms": ["normalize"],
+                "training_transforms": ["random_crop_padding_4", "random_horizontal_flip",
+                                        "to_float32_chw_uint8_div_255", "normalize"],
+                "evaluation_transforms": ["to_float32_chw_uint8_div_255", "normalize"],
             },
             "model": {
                 "num_classes": DATASETS[dataset], "pretrained": False,

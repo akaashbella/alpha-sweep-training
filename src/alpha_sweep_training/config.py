@@ -11,7 +11,10 @@ from pathlib import Path
 import re
 from typing import Any, Mapping
 
-from .spec import ALPHAS, ARCHITECTURES, DATASETS, SCHEMA_VERSION, SEED_COUNT, default_document
+from .spec import (
+    ALPHAS, ARCHITECTURES, DATASETS, SCHEMA_VERSION, SEED_COUNT,
+    PREPROCESSING_VERSION, DATA_RANDOMNESS_VERSION, default_document,
+)
 
 
 class ConfigError(ValueError):
@@ -191,7 +194,8 @@ def _validate(document: dict) -> None:
     for key in ("specification_version", "model", "optimizer", "perturbation", "evaluation"):
         _fixed(science[key], expected[key], f"scientific.{key}")
         science[key] = deepcopy(expected[key])
-    for key in ("image_size", "train_size", "validation_size", "test_size",
+    for key in ("preprocessing_version", "randomness_version",
+                "image_size", "train_size", "validation_size", "test_size",
                 "training_transforms", "evaluation_transforms"):
         _fixed(science["data"][key], expected["data"][key], f"scientific.data.{key}")
         science["data"][key] = deepcopy(expected["data"][key])
@@ -276,7 +280,7 @@ class RunConfig:
     __slots__ = ("_document",)
 
     def __init__(self, document: Mapping):
-        document = deepcopy(_mapping(document, "config"))
+        document = _migrate_v1(_mapping(document, "config"))
         try:
             science = _mapping(document["scientific"], "scientific")
             dataset = _choice(science["dataset"], DATASETS, "scientific.dataset")
@@ -376,6 +380,31 @@ def _override_layer(overrides: Mapping[str, Any]) -> dict:
     return layer
 
 
+def _migrate_v1(document: Mapping) -> dict:
+    """Explicit additive migration; never resolve a pending scientific decision.
+
+    Version 2 records preprocessing/randomness contracts and spells out tensor
+    conversion in the transform lists. All other fields stay unchanged and strict.
+    """
+    result = deepcopy(dict(document))
+    if type(result.get("schema_version")) is int and result["schema_version"] == 1:
+        result["schema_version"] = SCHEMA_VERSION
+        if "scientific" in result:
+            science = _mapping(result["scientific"], "scientific")
+            if "data" in science:
+                data = _mapping(science["data"], "scientific.data")
+                data.setdefault("preprocessing_version", PREPROCESSING_VERSION)
+                data.setdefault("randomness_version", DATA_RANDOMNESS_VERSION)
+                if data.get("training_transforms") == ["random_crop_padding_4", "random_horizontal_flip", "normalize"]:
+                    data["training_transforms"] = ["random_crop_padding_4", "random_horizontal_flip",
+                                                   "to_float32_chw_uint8_div_255", "normalize"]
+                if data.get("evaluation_transforms") == ["normalize"]:
+                    data["evaluation_transforms"] = ["to_float32_chw_uint8_div_255", "normalize"]
+                science["data"] = data
+            result["scientific"] = science
+    return result
+
+
 def from_declaration(*layers: Mapping, overrides: Mapping[str, Any] | None = None) -> RunConfig:
     """Apply base, dataset, model, then typed CLI overrides, in that order.
 
@@ -383,7 +412,7 @@ def from_declaration(*layers: Mapping, overrides: Mapping[str, Any] | None = Non
     never disappear when a selector changes; an incompatible recipe/classifier is
     rejected and must be overridden explicitly.
     """
-    declarations = [_mapping(layer, "declaration") for layer in layers]
+    declarations = [_migrate_v1(_mapping(layer, "declaration")) for layer in layers]
     if not declarations or "schema_version" not in declarations[0]:
         raise ConfigError("base declaration must contain schema_version")
     for layer in declarations:
