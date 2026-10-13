@@ -1,4 +1,4 @@
-"""Guarded run-directory initialization, separate from future checkpoint resume.
+"""Guarded run initialization and fully preflighted continuation/recovery leases.
 
 All writers must cooperate with these locks and keep open_run's context active
 throughout their use of a run. No artifact is considered disposable because a
@@ -13,15 +13,21 @@ from datetime import datetime, timezone
 import os
 from pathlib import Path
 import socket
-from typing import Iterator, Literal, Mapping
+from typing import TYPE_CHECKING, Iterator, Literal, Mapping
 import uuid
 
 from .config import RunConfig, load_config
 from .identity import identity_metadata, run_identity, scientific_fingerprint
 from .provenance import software_provenance
-from .serialization import atomic_write_json, atomic_write_text, read_json, resolved_config_text, strict_json_text
+from .serialization import (
+    atomic_write_json, atomic_write_text, durable_mkdir, fsync_directory,
+    read_json, resolved_config_text, strict_json_text,
+)
 
-RunOperation = Literal["new", "continue", "overwrite"]
+RunOperation = Literal["new", "continue", "recover", "overwrite"]
+
+if TYPE_CHECKING:
+    from .continuation import ContinuationPlan
 
 
 class RunDirectoryError(RuntimeError):
@@ -156,8 +162,6 @@ def _check_existing(paths: RunPaths, config: RunConfig, operation: RunOperation,
     _require_plain_file(config_file)
     record = read_json(metadata_file)
     _compatible_record(record, expected, metadata_file)
-    if record.get("status") == "completed":
-        raise RunDirectoryError("Run metadata records completion; explicit recovery or overwrite is required")
     existing_config = load_config(config_file)
     existing_config.require_research_ready()
     if scientific_fingerprint(existing_config) != expected["scientific_fingerprint"]:
@@ -181,8 +185,8 @@ def _check_existing(paths: RunPaths, config: RunConfig, operation: RunOperation,
         _require_plain_file(summary)
         result = read_json(summary)
         _compatible_record(result, expected, summary)
-        if result.get("status") == "completed":
-            raise RunDirectoryError("This run is completed; continuing training requires an explicit overwrite")
+        # Step 5 HEAD preflight owns completion/numerical-terminal decisions.
+        # These summary/metadata status fields are repairable derived views.
     # Attempt history is the only pre-existing directory written inside metadata.
     _inspect_directory(paths.metadata / "attempts")
 
@@ -195,7 +199,7 @@ def _run_locks(paths: RunPaths, expected: dict) -> Iterator[None]:
         # One lock per independent storage root guards users choosing different
         # metadata roots while pointing at the same checkpoint/result/log roots.
         for root in sorted(paths.managed_roots(), key=str):
-            root.parent.mkdir(parents=True, exist_ok=True)
+            durable_mkdir(root.parent)
             lock = root.parent / f".{root.name}.lock"
             if _is_link(lock):
                 raise RunDirectoryError(f"Refusing a linked lock file: {lock}")
@@ -210,6 +214,7 @@ def _run_locks(paths: RunPaths, expected: dict) -> Iterator[None]:
                                                "created_at_utc": datetime.now(timezone.utc).isoformat()}))
                 stream.flush()
                 os.fsync(stream.fileno())
+            fsync_directory(lock.parent)
         yield
     finally:
         for lock in reversed(acquired):
@@ -222,6 +227,7 @@ def _run_locks(paths: RunPaths, expected: dict) -> Iterator[None]:
                     continue
                 if isinstance(owner, dict) and owner.get("token") == token:
                     lock.unlink()
+                    fsync_directory(lock.parent)
 
 
 def _archive_selected(paths: RunPaths, attempt_id: str) -> tuple[Path, ...]:
@@ -237,11 +243,13 @@ def _archive_selected(paths: RunPaths, attempt_id: str) -> tuple[Path, ...]:
         for root, archive in moves:
             root.rename(archive)
             completed.append((root, archive))
+            fsync_directory(root.parent)
     except OSError:
         # Best-effort rollback of multi-root archiving; no old content is deleted.
         for root, archive in reversed(completed):
             if not root.exists():
                 archive.rename(root)
+                fsync_directory(root.parent)
         raise
     return tuple(archive for _, archive in completed)
 
@@ -254,14 +262,17 @@ def open_run(
     provenance: Mapping,
     operation: RunOperation = "new",
     overwrite_run_id: str | None = None,
+    continuation_plan: "ContinuationPlan | None" = None,
 ) -> Iterator[RunHandle]:
-    """Explicit new/compatible-continue/selected-overwrite artifact boundary.
+    """Explicit new/compatible-continue/publication-recover/selected-overwrite.
 
     Readiness, provenance, path safety, and existing files are checked before
     run-specific writes. Hold the context throughout future training/writes.
-    This does not restore checkpoints, skip epochs, or mark a run completed.
+    Continue/recover must supply a complete plan, preflighted before writes and
+    repeated under locks. The plan/service separately restore or repair; entering
+    this context itself never restores components or marks completion.
     """
-    if operation not in ("new", "continue", "overwrite"):
+    if operation not in ("new", "continue", "recover", "overwrite"):
         raise RunDirectoryError(f"Unknown operation: {operation!r}")
     config.require_research_ready()
     config = effective_storage_config(config, base_dir)
@@ -281,13 +292,22 @@ def open_run(
     attempt_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex
     # Preflight even before creating lock files, then repeat under locks to close
     # the race with another cooperating writer between inspection and locking.
+    if operation in ("continue", "recover"):
+        from .continuation import ContinuationPlan
+        if not isinstance(continuation_plan, ContinuationPlan):
+            raise RunDirectoryError("Continue/recover requires a complete ContinuationPlan preflight before any run-specific writes")
+        continuation_plan.preflight(paths, config, current_provenance, recovery=operation == "recover")
+    elif continuation_plan is not None:
+        raise RunDirectoryError("A continuation plan is only used with continue/recover")
     _check_existing(paths, config, operation, current_provenance)
     with _run_locks(paths, expected):
         _check_existing(paths, config, operation, current_provenance)
+        if operation in ("continue", "recover"):
+            continuation_plan.preflight(paths, config, current_provenance, recovery=operation == "recover")
         archives = _archive_selected(paths, attempt_id) if operation == "overwrite" else ()
         for directory in paths.directories():
-            directory.mkdir(parents=True, exist_ok=True)
-        if operation != "continue":
+            durable_mkdir(directory)
+        if operation in ("new", "overwrite"):
             atomic_write_json(paths.metadata / "run_metadata.json", {
                 **expected, "status": "initialized", "provenance": current_provenance,
                 "created_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -297,7 +317,9 @@ def open_run(
             if not marker.exists():
                 atomic_write_json(marker, expected)
         attempt = paths.metadata / "attempts" / attempt_id
-        attempt.mkdir(parents=True, exist_ok=False)
+        durable_mkdir(attempt.parent)
+        attempt.mkdir(exist_ok=False)
+        fsync_directory(attempt.parent)
         atomic_write_text(attempt / "resolved_config.yaml", yaml_text)
         atomic_write_json(attempt / "metadata.json", {
             **expected, "operation": operation, "provenance": current_provenance,

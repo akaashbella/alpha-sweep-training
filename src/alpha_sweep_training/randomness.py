@@ -76,6 +76,10 @@ class RuntimeStreams:
             raise ComponentError("Use fresh streams once for a new run, or restore streams once for continuation")
         self._claimed = True
 
+    def require_unrestored(self) -> None:
+        if self._origin is not None or self._claimed:
+            raise ComponentError("Continuation requires new RuntimeStreams(initialize=False) with no restore/claim yet")
+
     @property
     def noise_generator(self) -> torch.Generator:
         if self._origin is None:

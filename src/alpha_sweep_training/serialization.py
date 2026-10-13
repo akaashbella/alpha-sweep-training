@@ -9,6 +9,31 @@ from typing import Any
 from .config import RunConfig
 
 
+def fsync_directory(path: Path) -> None:
+    """POSIX durability requirement; Windows provides no directory-fsync claim."""
+    if os.name == "posix":
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+
+def durable_mkdir(path: Path) -> None:
+    """Publish every newly created parent entry before referencing descendants."""
+    missing, current = [], path
+    while not current.exists():
+        missing.append(current)
+        if current.parent == current:
+            raise ValueError(f"Storage root is unavailable: {current}")
+        current = current.parent
+    if not current.is_dir():
+        raise ValueError(f"Expected directory: {current}")
+    for directory in reversed(missing):
+        directory.mkdir(exist_ok=True)
+        fsync_directory(directory.parent)
+
+
 def strict_json_text(value: Any) -> str:
     """Reject nonfinite numbers; failure metrics must be null with explicit status."""
     return json.dumps(value, sort_keys=True, indent=2, ensure_ascii=False,
@@ -43,7 +68,7 @@ def atomic_write_text(path: str | Path, text: str) -> None:
     path = Path(path)
     if path.is_symlink():
         raise ValueError(f"Refusing to replace a symbolic link: {path}")
-    path.parent.mkdir(parents=True, exist_ok=True)
+    durable_mkdir(path.parent)
     temporary = None
     try:
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", newline="\n",
@@ -56,12 +81,7 @@ def atomic_write_text(path: str | Path, text: str) -> None:
         os.replace(temporary, path)
         temporary = None
         # Directory fsync is supported on POSIX HPC storage, not on Windows.
-        if os.name == "posix":
-            descriptor = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-            try:
-                os.fsync(descriptor)
-            finally:
-                os.close(descriptor)
+        fsync_directory(path.parent)
     finally:
         if temporary is not None:
             temporary.unlink(missing_ok=True)

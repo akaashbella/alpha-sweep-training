@@ -47,6 +47,21 @@ class _Schedule:
                 "base_learning_rates": list(self.base_learning_rates),
                 "warmup_start_factor": self.warmup_start_factor, "cosine_min_lr": self.cosine_min_lr}
 
+    def rates_at(self, position: int) -> tuple[float, ...]:
+        integer_count(position, "scheduler completed_units")
+        if position > self.total_units:
+            raise SchedulerError("Schedule position exceeds the original training horizon")
+        if position == self.warmup_units:
+            return self.base_learning_rates
+        if position == self.total_units:
+            return tuple(self.cosine_min_lr for _ in self.base_learning_rates)
+        if position < self.warmup_units:
+            fraction = self.warmup_start_factor + (1 - self.warmup_start_factor) * position / self.warmup_units
+            return tuple(base * fraction for base in self.base_learning_rates)
+        fraction = (1 + math.cos(math.pi * (position - self.warmup_units)
+                                 / (self.total_units - self.warmup_units))) / 2
+        return tuple(self.cosine_min_lr + (base - self.cosine_min_lr) * fraction for base in self.base_learning_rates)
+
 
 class WarmupCosineScheduler:
     """The next training unit uses lr(n); step() follows its completion.
@@ -131,29 +146,17 @@ class WarmupCosineScheduler:
         return tuple(float(group["lr"]) for group in self._optimizer.param_groups)
 
     def _rates_at(self, position: int) -> tuple[float, ...]:
-        integer_count(position, "scheduler completed_units")
-        if position > self.total_units:
-            raise SchedulerError("Schedule position exceeds the original training horizon")
-        schedule = self._schedule
-        # Return declared endpoints exactly, avoiding subtraction/addition
-        # roundoff at these mathematically identical cosine boundaries.
-        if position == self.warmup_units:
-            return schedule.base_learning_rates
-        if position == self.total_units:
-            return tuple(schedule.cosine_min_lr for _ in schedule.base_learning_rates)
-        if position < self.warmup_units:
-            fraction = schedule.warmup_start_factor + (1 - schedule.warmup_start_factor) * position / self.warmup_units
-            return tuple(base * fraction for base in schedule.base_learning_rates)
-        fraction = (1 + math.cos(math.pi * (position - self.warmup_units)
-                                 / (self.total_units - self.warmup_units))) / 2
-        return tuple(schedule.cosine_min_lr + (base - schedule.cosine_min_lr) * fraction
-                     for base in schedule.base_learning_rates)
+        return self._schedule.rates_at(position)
 
     def _require_lr(self, expected: tuple[float, ...]) -> None:
         actual = tuple(finite_number(group["lr"], "optimizer LR") for group in self._optimizer.param_groups)
         if len(actual) != len(expected) or any(not math.isclose(a, b, rel_tol=1e-12, abs_tol=0.0)
                                                for a, b in zip(actual, expected)):
             raise SchedulerError("Optimizer LR disagrees with the scheduler position; restore optimizer state before scheduler state and do not change LR externally")
+
+    def learning_rates_at(self, position: int) -> tuple[float, ...]:
+        """Read-only saved-LR preflight; does not initialize or advance state."""
+        return self._rates_at(position)
 
     def _apply(self, rates: tuple[float, ...]) -> None:
         for group, rate in zip(self._optimizer.param_groups, rates):
@@ -235,3 +238,19 @@ def build_scheduler(optimizer: Optimizer, config: RunConfig, steps_per_epoch: in
                     *, initialize: bool = True) -> WarmupCosineScheduler:
     """Pass len(loaders.train); use initialize=False before restoring optimizer."""
     return WarmupCosineScheduler(optimizer, config, steps_per_epoch, initialize=initialize)
+
+
+def saved_schedule_rates(config: RunConfig, steps_per_epoch: int, state: dict,
+                         completed_epochs: int, successful_updates: int) -> tuple[float, ...]:
+    """Pure saved-descriptor/counter validation before constructing live objects."""
+    from .serialization import strict_json_text
+    science = config.scientific
+    training = science["training"]
+    descriptor = _Schedule(science["architecture"], training["scheduler_interval"], training["epochs"],
+                           training["warmup_epochs"], steps_per_epoch if training["scheduler_interval"] == "optimizer_step" else None,
+                           (science["optimizer"]["learning_rate"],), training["warmup_start_factor"], training["cosine_min_lr"])
+    position = completed_epochs if descriptor.interval == "epoch" else successful_updates
+    expected = {**descriptor.to_dict(), "completed_units": position}
+    if strict_json_text(state) != strict_json_text(expected):
+        raise SchedulerError("Saved scheduler descriptor/position disagrees with original config/counters")
+    return descriptor.rates_at(position)

@@ -117,7 +117,7 @@ class TrainingSnapshot:
     rng: dict
     data_continuation: dict
     counters: Counters
-    best: BestSelection
+    best: BestSelection | None
     component_metadata: dict
     format_version: int = 1
     clean_weights: bool = True
@@ -138,6 +138,12 @@ class EpochBoundary:
     @property
     def save_final(self) -> bool:
         return self.record.completed_epochs == EPOCHS
+
+
+@dataclass(frozen=True)
+class InitialBoundary:
+    context: RecordContext
+    snapshot: TrainingSnapshot
 
 
 @dataclass(frozen=True)
@@ -169,6 +175,10 @@ class TrainingPersistence(Protocol):
     to commit before returning. Exceptions stop the trainer; Step 5 reconciles
     unknown commit outcomes. All paths come from run.paths. No log controls resume.
     """
+
+    def commit_initial(self, run: RunHandle, boundary: InitialBoundary) -> CommitReceipt:
+        """Durable fresh clean epoch-zero state; no records, best or final yet."""
+        ...
 
     def commit_epoch(self, run: RunHandle, boundary: EpochBoundary) -> CommitReceipt:
         """Commit latest + metrics/statistics/selection together; best on strict
@@ -209,4 +219,4 @@ class TrainingPersistence(Protocol):
 
 def require_persistence(service: TrainingPersistence) -> None:
     if not isinstance(service, TrainingPersistence):
-        raise ComponentError("Step 4 training requires a real Step 5 TrainingPersistence service implementing commit_epoch, load_best, publish_completion and publish_failure; none is bundled yet")
+        raise ComponentError("Training requires TrainingPersistence implementing commit_initial, commit_epoch, load_best, publish_completion and publish_failure")

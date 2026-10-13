@@ -2,8 +2,9 @@
 
 Compute APIs live in data.py, prepare.py, models.py, weights.py, optimizers.py,
 and scheduler.py, plus training.py and its runtime/evaluation/record contracts.
-Compute dependencies are not imported by this initializer. Checkpoint persistence,
-recovery and experiment launchers remain later steps.
+Checkpoint/persistence/continuation/recovery APIs live in their own modules.
+Compute dependencies are not imported by this initializer. Experiment launchers,
+controllers/manifests and Slurm orchestration remain later steps.
 """
 
 from .config import ConfigError, RunConfig, UnresolvedConfigError, load_config

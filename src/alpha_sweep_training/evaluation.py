@@ -8,6 +8,7 @@ from torch.utils.data import DataLoader, SequentialSampler
 from .component_contracts import ComponentError
 from .config import RunConfig
 from .data import EvaluationView
+from .interruption import StopRequest
 from .metrics import ClassificationMetrics, MetricAccumulator
 from .models import model_construction
 from .numerical import require_clean_model, require_finite
@@ -36,7 +37,7 @@ def classification_loss(logits: torch.Tensor, labels: torch.Tensor, num_classes:
 
 
 def evaluate_clean(model: nn.Module, loader: DataLoader, *, split: str,
-                   config: RunConfig, runtime: RuntimePolicy) -> ClassificationMetrics:
+                   config: RunConfig, runtime: RuntimePolicy, stop: StopRequest | None = None) -> ClassificationMetrics:
     """Evaluate one full deterministic split; never accepts a noise generator."""
     if split not in ("validation", "test"):
         raise ComponentError("Clean evaluator supports only full validation or official test")
@@ -60,6 +61,8 @@ def evaluate_clean(model: nn.Module, loader: DataLoader, *, split: str,
         model.eval()
         with torch.inference_mode():
             for batch_index, batch in enumerate(loader):
+                if stop is not None:
+                    stop.check(at_boundary=False, phase=f"clean_{split}_batch")
                 images, labels = runtime.batch(batch, info.num_classes)
                 with runtime.autocast():
                     logits = model(images)

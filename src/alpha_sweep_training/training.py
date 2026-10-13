@@ -15,6 +15,7 @@ from .config import RunConfig
 from .data import DataLoaders, TrainingView
 from .evaluation import EvaluationFailure, classification_loss, evaluate_clean
 from .identity import identity_metadata
+from .interruption import StopRequest, TrainingInterrupted
 from .metrics import (
     AmpSkip, BestSelection, Counters, EpochRecord, FailureRecord, MetricAccumulator,
     RecordContext, TestRecord, append_train_log, clean_layer_statistics,
@@ -28,7 +29,7 @@ from .runtime import RuntimePolicy
 from .scheduler import WarmupCosineScheduler
 from .spec import BATCH_SIZE, EPOCHS, TEST_SIZE, TRAIN_SIZE, VALIDATION_SIZE
 from .training_contracts import (
-    BestLoadReceipt, CommitReceipt, CompletionReceipt, ContinuationState, EpochBoundary,
+    BestLoadReceipt, CommitReceipt, CompletionReceipt, ContinuationState, EpochBoundary, InitialBoundary,
     PersistenceContractError, TrainingPersistence, TrainingSnapshot, owned_cpu_snapshot, require_persistence,
 )
 
@@ -138,7 +139,7 @@ def _backward_and_update(loss: torch.Tensor, model: nn.Module, optimizer: Optimi
 
 def _snapshot(config: RunConfig, run: RunHandle, data: DataLoaders, model: nn.Module,
               optimizer: Optimizer, scheduler: WarmupCosineScheduler, runtime: RuntimePolicy,
-              streams: RuntimeStreams, counters: Counters, best: BestSelection) -> TrainingSnapshot:
+              streams: RuntimeStreams, counters: Counters, best: BestSelection | None) -> TrainingSnapshot:
     run.require_active(config)
     require_clean_model(model, runtime.device, stage="snapshot_clean_state")
     require_finite_optimizer(optimizer, model)
@@ -158,16 +159,20 @@ def _snapshot(config: RunConfig, run: RunHandle, data: DataLoaders, model: nn.Mo
 def train_run(config: RunConfig, data: DataLoaders, model: nn.Module, optimizer: Optimizer,
               scheduler: WarmupCosineScheduler, run: RunHandle, *, runtime: RuntimePolicy,
               streams: RuntimeStreams, persistence: TrainingPersistence,
-              continuation: ContinuationState | None = None) -> TrainingResult:
+              continuation: ContinuationState | None = None, stop: StopRequest | None = None) -> TrainingResult:
     """Train remaining original epochs, then require persisted-best full test.
 
-    No command wraps this function and no default persistence service exists.
+    No command wraps this function; pass the concrete persistence service explicitly.
     Step 5 must restore all live components before passing ContinuationState.
     Returning success requires durable epoch/final/test/summary acknowledgements.
     """
-    require_persistence(persistence)  # Fail before computation if Step 5 is absent.
+    require_persistence(persistence)  # Fail before computation if the service is absent.
     config.require_research_ready()
     run.require_active(config)
+    if run.operation == "recover":
+        raise ComponentError("Recovery repairs publication; use explicit continuation to compute")
+    if stop is not None and not isinstance(stop, StopRequest):
+        raise ComponentError("stop must be a StopRequest")
     if continuation is not None and not isinstance(continuation, ContinuationState):
         raise ComponentError("Continuation requires Step 5's validated ContinuationState")
     if (run.operation == "continue") != (continuation is not None):
@@ -209,11 +214,28 @@ def train_run(config: RunConfig, data: DataLoaders, model: nn.Module, optimizer:
             if data.restore_next_epoch(continuation.data_continuation) != counters.completed_epochs:
                 raise ComponentError("Restored data epoch differs from the validated training boundary")
         streams.claim(config, runtime.device, continuation=continuation is not None)
+        if continuation is None:
+            phase = "initial_snapshot"
+            with streams.preserve():
+                snapshot = _snapshot(config, run, data, model, optimizer, scheduler, runtime, streams, counters, None)
+                phase, commit_outcome = "initial_commit", "unknown_until_acknowledged"
+                receipt = persistence.commit_initial(run, InitialBoundary(context, snapshot))
+                if not isinstance(receipt, CommitReceipt):
+                    raise PersistenceContractError("commit_initial must acknowledge durable epoch-zero state")
+                receipt.validate(config, counters, None)
+                last_commit = receipt
+                commit_outcome = "acknowledged"
+                del snapshot
+            commit_outcome = "no_commit_in_flight"
+        phase = "training_entry"
         with streams.preserve():
             append_train_log(run, context, "training_entry", {
                 "status": "trained_pending_test" if durable_epochs == EPOCHS else "training",
                 "durable_completed_epochs": durable_epochs, "runtime": runtime.metadata(),
                 "randomness": streams.metadata(), "counters": asdict(counters)})
+        if stop is not None:
+            phase = "committed_entry_boundary"
+            stop.check(at_boundary=True, phase=phase)
         science = config.scientific
         for epoch_index in range(counters.completed_epochs, EPOCHS):
             phase, batch_index = "epoch_start", None
@@ -230,6 +252,8 @@ def train_run(config: RunConfig, data: DataLoaders, model: nn.Module, optimizer:
             skips = []
             for batch_index, batch in enumerate(data.train):
                 phase = "training_batch"
+                if stop is not None:
+                    stop.check(at_boundary=False, phase=phase)
                 if batch_index >= data.metadata.counts.training_batches:
                     raise ComponentError("Training loader exceeded its declared full-epoch batch count")
                 counters = replace(counters, attempted_batches=counters.attempted_batches + 1)
@@ -264,6 +288,9 @@ def train_run(config: RunConfig, data: DataLoaders, model: nn.Module, optimizer:
                             "counters": asdict(counters), **asdict(skip)})
                 optimizer.zero_grad(set_to_none=True)
                 del loss, logits, images, labels
+            if stop is not None:
+                phase = "end_of_training_batches"
+                stop.check(at_boundary=False, phase=phase)
             phase, batch_index = "epoch_coverage", None
             training_metrics = accumulator.finish()
             if (training_metrics.examples != data.metadata.counts.training_processed_per_epoch
@@ -276,7 +303,7 @@ def train_run(config: RunConfig, data: DataLoaders, model: nn.Module, optimizer:
             require_finite_optimizer(optimizer, model)
             statistics = clean_layer_statistics(model)
             phase = "clean_validation"
-            validation = evaluate_clean(model, data.validation, split="validation", config=config, runtime=runtime)
+            validation = evaluate_clean(model, data.validation, split="validation", config=config, runtime=runtime, stop=stop)
             selected = best is None or validation.correct > best.correct
             if selected:
                 best = BestSelection(epoch_index, validation.correct)
@@ -292,6 +319,8 @@ def train_run(config: RunConfig, data: DataLoaders, model: nn.Module, optimizer:
                 scheduler.completed_units, scheduler.interval, time.perf_counter() - started,
                 selected, best, tuple(skips), "trained_pending_test" if counters.completed_epochs == EPOCHS else "training")
             phase = "epoch_snapshot"
+            if stop is not None:
+                stop.check(at_boundary=False, phase=phase)
             with streams.preserve():
                 snapshot = _snapshot(config, run, data, model, optimizer, scheduler, runtime, streams, counters, best)
                 boundary = EpochBoundary(context, record, statistics, snapshot,
@@ -311,6 +340,9 @@ def train_run(config: RunConfig, data: DataLoaders, model: nn.Module, optimizer:
                 phase = "epoch_diagnostic_log"
                 append_train_log(run, context, "epoch_committed", {"commit_id": receipt.commit_id, **record.to_dict()})
             commit_outcome = "no_commit_in_flight"
+            if stop is not None:
+                phase = "committed_epoch_boundary"
+                stop.check(at_boundary=True, phase=phase)
 
         # A separate evaluation model prevents best weights from ever being paired
         # with final optimizer state in the live continuation model or latest.
@@ -339,10 +371,13 @@ def train_run(config: RunConfig, data: DataLoaders, model: nn.Module, optimizer:
         phase = "clean_test"
         runtime.require_active(config)
         started = time.perf_counter()
-        test_metrics = evaluate_clean(evaluation_model, data.test, split="test", config=config, runtime=runtime)
+        test_metrics = evaluate_clean(evaluation_model, data.test, split="test", config=config, runtime=runtime, stop=stop)
         test = TestRecord(test_metrics, best, asdict(last_commit.best), last_commit.commit_id,
                           time.perf_counter() - started)
         del evaluation_model, original_parameters, original_buffers, current, buffers
+        if stop is not None:
+            phase = "clean_test_finished_before_publication"
+            stop.check(at_boundary=True, phase=phase)
         phase, commit_outcome = "completion_commit", "unknown_until_acknowledged"
         with streams.preserve():
             run.require_active()
@@ -360,9 +395,9 @@ def train_run(config: RunConfig, data: DataLoaders, model: nn.Module, optimizer:
         cause = exc.cause if isinstance(exc, EvaluationFailure) else exc
         failed_batch = exc.batch_index if isinstance(exc, EvaluationFailure) else batch_index
         status = ("failed_numerical" if isinstance(cause, NumericalFailure) else
-                  "interrupted" if isinstance(exc, (KeyboardInterrupt, SystemExit)) else "failed_execution")
+                  "interrupted" if isinstance(cause, (TrainingInterrupted, KeyboardInterrupt, SystemExit)) else "failed_execution")
         failure = FailureRecord(status, phase,
-                                str(exc), type(cause).__name__, epoch_index, failed_batch, counters,
+                                str(exc) or type(cause).__name__, type(cause).__name__, epoch_index, failed_batch, counters,
                                 durable_epochs, None if last_commit is None else last_commit.commit_id,
                                 cause.tensors if isinstance(cause, NumericalFailure) else (),
                                 numerical_stage=cause.stage if isinstance(cause, NumericalFailure) else None,
