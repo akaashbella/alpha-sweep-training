@@ -150,9 +150,16 @@ validation accuracy across all three seeds, never test accuracy.
 Prominently display each seed's validation and test result. Mean/std are
 supporting summaries, not substitutes for individual runs. Record per-epoch
 metrics and clean layer-weight statistics, including population standard
-deviation. Reporting must state its standard-deviation convention explicitly;
-the cross-seed summary convention and best-alpha tie handling are to be finalized
-for Step 8, without concealing ties or missing/failed seeds.
+deviation. Step 8 reporting uses sample SD (`ddof=1`, null for n<2), with complete
+prescribed seed/realization sets required for official summaries. Positive-noise
+realizations are averaged within each checkpoint before means/sample SD across
+training seeds; these two SD levels remain separate. Global training-alpha selection
+requires all ten complete three-seed completed-training validation sets. Retain
+all exact unrounded mean ties as co-winners in approved grid order; incomplete grids
+have no official winner. Test results do not affect eligibility or tie-breaking.
+Accuracy is a fraction; differences are percentage points. Paired comparisons are
+descriptive only. See [results-and-figures.md](results-and-figures.md) for implemented
+raw/derived schemas, completeness and individual-first figures.
 
 Numerical failures are explicit terminal status records with
 reason, epoch/step, and the affected metric/tensor where available. JSON numeric

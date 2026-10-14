@@ -341,3 +341,10 @@ diagnostic), plus the existing full training/evaluation scientific coverage and
 individual realization schemas. Workflow statuses describe allocations; only
 training HEAD and evaluation slot/SWEEP_HEAD authorities establish science.
 Aggregation, mean/std, test-driven selection and plotting are not implemented here.
+
+Step 8 now supplies [reporting/figures](results-and-figures.md) separately.
+`alpha-sweep-report` never queries Slurm or mutates the workflow. Declare workflow
+and additional operational roots so derived outputs cannot overlap them. Reporting
+validates historical journal/slot evidence independently of allocation success,
+with all expected rows and explicit deferred/failure coverage. Test-driven selection
+remains prohibited.

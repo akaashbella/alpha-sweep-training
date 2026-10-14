@@ -1,5 +1,11 @@
 # Durable checkpoints, continuation and recovery
 
+Step 8's [read-only reporting](results-and-figures.md) reuses this journal,
+receipt/epoch/completion validation and historical provenance. It exports captured
+committed records and checkpoint references; no alias, allocation outcome or report
+marker establishes training completion. Reporting does not restore state, acquire
+research writer leases or repair publication.
+
 Step 5 is implemented in source only. No project imports/execution, model
 construction, tests, compilation, linting, training/evaluation, installations,
 downloads, artifact generation, experiments or jobs were performed. Runtime

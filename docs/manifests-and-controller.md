@@ -333,3 +333,9 @@ scheduler accounting. `alpha-sweep-allocation` delegates to existing task execut
 with scoped StopRequest handlers. It adds no parallel training/evaluation engine.
 See [slurm-workflow.md](slurm-workflow.md) for explicit operational actions and
 the independent allocation/scientific status join supplied to Step 8.
+
+Step 8 now implements `alpha-sweep-report` separately from task/workflow commands:
+full-manifest authoritative collection, complete prescribed summaries, validation-only
+co-winners, paired descriptions, derived-output inspection and headless figures.
+It reads stored historical provenance and never uses allocation/CSV outcomes as
+science authority. See [results-and-figures.md](results-and-figures.md).

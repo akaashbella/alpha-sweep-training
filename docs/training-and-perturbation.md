@@ -314,6 +314,7 @@ cannot be blindly continued under a new fingerprint.
 
 Still unresolved: exact three seeds/task seed, independent split preparation seed
 and persisted split, normalization policy/constants for each dataset, `drop_last`,
-all precision/backend settings, warmup factor, cosine minimum and cadence. Cross-seed
-std convention and best-alpha tie reporting remain Step 8 decisions. No provisional
+all precision/backend settings, warmup factor, cosine minimum and cadence. Step 8
+now specifies sample SD and all exact validation-mean co-winners in
+[results-and-figures.md](results-and-figures.md). No provisional
 value has become a research default. See [configuration.md](configuration.md).

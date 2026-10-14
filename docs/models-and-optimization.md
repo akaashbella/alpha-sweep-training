@@ -211,7 +211,9 @@ The exact three training seeds, split preparation seed, normalization policy and
 constants for each dataset, drop_last, precision/backend policy, warmup factor,
 cosine minimum and scheduler cadence remain unresolved. Pending component
 settings produce actionable construction errors. Aggregation's standard-deviation
-convention and best-alpha tie policy remain Step 8 decisions.
+convention and best-alpha tie policy are now specified by Step 8 as sample SD
+ddof=1 and all exact validation-mean co-winners in grid order; see
+[results-and-figures.md](results-and-figures.md).
 
 Schema/fingerprint version 4 retains fixed model builder, initialization and
 scheduler fields and adds training engine/runtime randomness fields. Explicit
@@ -230,4 +232,5 @@ durable initial/epoch boundaries. Step 6's
 [controller](manifests-and-controller.md) now connects one selected task using these
 builders, explicit fresh/continuation initialization and actual loader counts.
 Step 7 now supplies source-only Slurm/signals through
-[slurm-workflow.md](slurm-workflow.md). Reporting and HPC runtime checks remain later work.
+[slurm-workflow.md](slurm-workflow.md). Step 8 now supplies source-only
+[results/figures](results-and-figures.md); HPC runtime checks remain deferred.

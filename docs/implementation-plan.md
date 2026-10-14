@@ -1,6 +1,6 @@
 # Shared contracts and remaining implementation steps
 
-Steps 1–7 implement configuration, identity, finite atomic serialization,
+Steps 1–8 implement configuration, identity, finite atomic serialization,
 provenance validation, guarded run initialization, full official CIFAR preparation,
 reproducible loaders, all four scratch CIFAR models, owned eligible-weight
 inventory, fixed optimizers, the original-budget scheduler, shared training,
@@ -10,7 +10,9 @@ coordinated publication/recovery, stop requests, full manifests, one-task execut
 and complete read-only coverage. These sources have not been
 executed or runtime-verified. Step 7 now adds source-only operational policy,
 bounded Slurm waves, shared workflow authority, signal delivery and allocation
-continuation. Reporting/final integration remain future work. Commands are for later HPC use. See
+continuation. Step 8 implements authoritative result snapshots, complete summaries,
+validation co-winners, paired comparisons, guarded reporting and headless figures.
+Final integration remains Step 9. Commands are for later HPC use. See
 [models-and-optimization.md](models-and-optimization.md) and
 [training-and-perturbation.md](training-and-perturbation.md) and
 [checkpoints-and-recovery.md](checkpoints-and-recovery.md) for implemented contracts.
@@ -41,8 +43,8 @@ global clean-only testing while retaining clean validation and the mandatory bas
 | Coverage/provenance | inspect_task/collect_coverage → complete identity join and phase eligibility; collect_provenance → actual future execution source/software/allocation record | 6 implemented |
 | Independent evaluation | EvaluationProtocol/slots/hash seeds; build_test_loader, evaluation-only runtime, evaluate_realization and CleanStateBaseline; verified best binding, independent slot/sweep persistence, execute_evaluation and full logical coverage | approved integration after 6 |
 | Slurm workflow | OperationalPolicy/resource_budget, build_work_plan/render_work, WorkflowLease, submit_bundle, SlurmClient, run_allocation/scoped handlers → sealed mappings, durable intents/outcomes and one-shot reconciliation/advancement | 7 implemented, execution deferred |
-| Aggregation | collect_results(manifest) → every individual seed row and explicit completion/failure coverage; validation-selected alpha plus supporting mean/std | 8 |
-| Plotting | plot_results(aggregate) → shareable figures with seed observations visible, uncertainty convention and missing/failure annotations | 8 |
+| Aggregation | collect_results(manifest, base_dir, source_root, execution-only overrides) → sealed 240/6720-row historical collection; summarize_results → complete ddof=1 summaries, validation-only co-winners and paired descriptions | 8 implemented, execution deferred |
+| Plotting/report publication | plot_results(collection, output_dir, source_root); collection/summaries publishers and inspect_report → owned checksummed derived outputs, six headless figure families, individual-first observations and masked coverage | 8 implemented, execution deferred |
 
 These are responsibility contracts, not a mandatory class hierarchy. Keep
 interfaces small and share one configuration/identity implementation. Runtime
@@ -221,14 +223,14 @@ robustness pending cannot force training again. Exact APIs/commands, raw schemas
 version/compatibility policies and Step 7/8 consumers are documented in the
 evaluation guide. No test results select checkpoints, alpha or hyperparameters.
 
-Step 8 must join against the complete manifest, prominently retain individual
+Step 8 joins against the complete manifest, prominently retains individual
 seed rows, and report missing/interrupted/numerically failed runs rather than
 filtering them out. Best alpha is based on the mean validation result from the
-complete three-seed set. Specify cross-seed std convention and how exact
-validation-mean ties are reported before generating final aggregates. Report
+complete three-seed set. Sample SD is ddof=1 and exact unrounded validation-mean
+ties are all reported in grid order. Incomplete grids have no official winner. Report
 test results for every alpha/seed, not only the selected alpha.
 
-## Steps 2–7 completed in source; remaining steps in order
+## Steps 2–8 completed in source; remaining step in order
 
 2. **Dataset preparation and reproducibility (implemented, execution deferred).** Official dataset integrity,
    persistent fixed splits, finalized normalization, seeding/augmentation
@@ -264,15 +266,19 @@ remains deferred.
    reconciliation, scoped StopRequest delivery, safe bounded continuation, explicit
    failure/submission/lock recovery and immutable allocation outcomes. See
    [slurm-workflow.md](slurm-workflow.md). No manifests, bundles or jobs generated.
-8. **Results aggregation and figures.** Seed-first results for every task,
+8. **Results aggregation and figures (implemented in source, execution deferred).** Seed-first results for every task,
    validation-based alpha selection, transparent supporting mean/std summaries,
    failure/coverage reporting, raw training-alpha × evaluation-alpha analysis retaining seeds and realizations separately, and final figures.
+   Historical journal/slot validators, complete prescribed two-stage sample SD,
+   all-ten validation-only co-winners, paired differences, read-only snapshots,
+   derived namespace ownership and PNG/PDF/SVG families are documented in
+   [results-and-figures.md](results-and-figures.md). No aggregates/figures generated.
 9. **Final source integration and operating documentation.** Source-only
    consistency review, dependency/CLI/manifest integration, and complete HPC
    operating instructions. Runtime validation occurs after all nine steps.
 
 Each implementation step ends with source and Git-diff inspection, not executable
 verification. Do not create tests, smoke configs, demonstrations, preliminary
-experiments, or placeholder modules. Step 7 stops before Step 8 aggregation and
-plotting. Actual HPC setup, accounting/driver/filesystem validation and runtime
+experiments, or placeholder modules. Step 8 stops before Step 9 final integration.
+Actual HPC setup, accounting/driver/filesystem validation and runtime
 verification remain authorized work after the complete implementation.

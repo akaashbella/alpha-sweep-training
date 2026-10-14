@@ -299,4 +299,8 @@ selection, heatmaps or plotting are implemented here.
 
 Still pending: training seed plan, preparation seed/splits, normalization choices,
 drop_last, precision/backend policy and scheduler endpoints/cadence. Account and
-actual resources remain Step 7 inputs; aggregation conventions remain Step 8.
+actual resources remain Step 7 inputs. Step 8 reporting now preserves every raw
+realization and requested/unbound slot, supports valid successes with deferred
+sweep publication, averages three realizations within each checkpoint before
+cross-seed sample SD and retains legacy clean evidence separately. See
+[results-and-figures.md](results-and-figures.md). It never writes these authorities.

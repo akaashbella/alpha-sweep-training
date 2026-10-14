@@ -1,5 +1,12 @@
 # OSU dgxh execution contract
 
+Step 8's [production reporting](results-and-figures.md) is source-only and separate
+from scheduling. Later collection/plot commands read persistent authorities without
+training/evaluation/workflow writer locks, use headless figures and write exclusively
+to new protected derived namespaces. Declared reporting outputs must be outside the
+storage base, scientific stores and workflow/Slurm-log roots. Reporting publication
+completeness is not scientific or allocation completion.
+
 Step 7 implements this contract in source, without execution or measurements.
 The exact commands, operational schema, registry, signals and operator recovery
 are in [slurm-workflow.md](slurm-workflow.md). No jobs, Slurm queries or preliminary

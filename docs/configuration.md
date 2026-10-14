@@ -9,6 +9,12 @@ execution-only overrides preserve existing run identity; see
 
 ## Schema and current scope
 
+Step 8 adds a separate derived reporting-v1 contract, without changing this schema,
+scientific hash or evaluation seeds. Sample SD, complete prescribed observations,
+two-stage robustness means and validation-only co-winner rules are in
+[results-and-figures.md](results-and-figures.md). Reporting storage/options/provenance
+are outside research identity; unresolved science remains unresolved.
+
 `schema_version: 4` describes the file structure; `scientific.specification_version:
 main-v1` describes the experiment. The effective document has exactly three top
 keys: `schema_version`, `scientific`, `execution`. No arbitrary extra settings,
