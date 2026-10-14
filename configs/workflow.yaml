@@ -24,7 +24,7 @@ paths:
   result_root: null
   log_root: null
   data_root: null
-  split_file: null
+  split_file: null # Inherit each finalized manifest dataset split; never a global override.
 environment:
   python_executable: null
   activation_script: null

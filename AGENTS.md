@@ -14,6 +14,11 @@ Implemented production scheduling, operational policy, signals and workflow auth
 [docs/slurm-workflow.md](docs/slurm-workflow.md).
 Implemented results/figures contracts and reporting-only ownership:
 [docs/results-and-figures.md](docs/results-and-figures.md).
+All nine steps are complete in source. The final operating/verification handoff is
+[docs/operating-guide.md](docs/operating-guide.md); source evidence is in
+[docs/step9-progress.md](docs/step9-progress.md). Stop at source review; later setup,
+runtime verification, artifact generation and execution require a separate explicit
+instruction. Implementation completion never automatically authorizes that phase.
 
 ## Implementation-only workflow
 
@@ -29,7 +34,7 @@ and reuse useful source. During all nine implementation steps:
 - Do not run compilation, linting, or executable verification commands.
 - Read source, search files, inspect Git status/diffs, and edit files only.
 - Existing tests/smoke files may remain inactive; do not expand or maintain them.
-- Runtime verification happens on OSU HPC after all nine implementation steps.
+- Runtime verification belongs to separately authorized OSU HPC work after all nine implementation steps.
 - Source inspection does not establish runtime correctness.
 
 Do not stop implementation over unresolved scientific decisions. Represent them
@@ -157,8 +162,10 @@ replicates 1–3 (28 slots/checkpoint, 6,720 total). Do not add other perturbati
 - Coverage joins every expected identity to journal authority. Keep stored status
   separate from locks/partial/incompatible/corrupt/unstable/inspection conditions;
   never infer completion from derived summaries or an allocation ending.
-  Source-only Step 6 work stops before Slurm submission, signal registration,
-  requeue/resubmission and cluster concurrency orchestration.
+  Managed Slurm submission/signals/concurrency use the separate Step 7 registry;
+  manual one-task training enforces the same CIFAR-10 completion computation gate.
+  Count-200 publication-only finalization and independent evaluation do not add
+  epochs and remain independent of that computation gate.
 - Keep frozen schema-4 scientific.alpha/run-ID alpha fields as training-only
   aliases. Evaluation declarations/fingerprints/seeds/namespaces are separate;
   changing evaluation does not create a different training run. Read legacy v1
@@ -170,8 +177,8 @@ replicates 1–3 (28 slots/checkpoint, 6,720 total). Do not add other perturbati
   training RNG/optimizer/scheduler/scaler state for independent evaluation.
 - Evaluation writers hold independent namespace/slot leases, never the training
   writer lease throughout a pass. Preserve raw slots, failures and orphan evidence;
-  successful slot and sweep HEAD references are authority. No aggregation/plots
-  or actual job orchestration during this integration.
+  successful slot and sweep HEAD references are authority. Reporting and workflow
+  use their own modules; no actual research/reporting/job execution during implementation.
 - Step 7 source implements one shared registry/controller for both datasets and
   lifecycles. At most one unresolved bounded wave reserves shared capacity;
   accounting/submission ambiguity never frees it. Validate combined resource-time
@@ -186,6 +193,14 @@ replicates 1–3 (28 slots/checkpoint, 6,720 total). Do not add other perturbati
   authority. Numerical failure is terminal; execution/unclassified failures need
   an audited operator decision. Bound allocation intents and preserve exhaustion.
   Step 7 commands are implemented but never run during source-only development.
+- Full-workflow policy inherits each dataset's finalized manifest split. Keep
+  paths.split_file null; non-null legacy global overrides are execution-rejected,
+  with historical policy/state validation retained. Relocation preserves prepared
+  content and updates both dataset paths in separate research inputs, never shared YAML.
+- Work pins include external activation/interpreter bytes and configured/resolved
+  interpreter paths plus module declarations. New render/submit/worker execution
+  rejects older unpinned work without rewriting its ownership/uncertain intents.
+  Preserve source/software continuation gates and immutable raw evaluator provenance.
 
 ## HPC constraints
 
@@ -198,8 +213,9 @@ means. Average realizations within each checkpoint before cross-seed summaries.
 Select training alpha only from all ten complete validation candidates; retain all
 exact mean ties in grid order. Preserve paired descriptive differences and every
 individual seed/realization. Derived reporting-v1 storage is separately guarded,
-finite, checksummed and never a scientific completion authority. Step 8 stops
-before Step 9; no reporting commands/figures are run during implementation.
+finite, checksummed and never a scientific completion authority. Step 9 completes
+source integration and operating docs; no reporting commands/figures are run during
+implementation. All later execution requires a separate explicit instruction.
 
 Target OSU `dgxh`: one GPU and one training process per independent
 dataset–architecture–alpha–seed run. Continue across allocations without resetting
