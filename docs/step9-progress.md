@@ -1,5 +1,9 @@
 # Step 9 final source integration
 
+The original Step 9 record below is historical. Its recovery-readability claims
+are corrected by the historical-policy follow-up at the end of this note; the
+original Git inventory describes that implementation turn, not the current tree.
+
 Reviewed baseline and actual local HEAD: `main`,
 `68c0dbfba0f7596db00355a7332507e8a5e1e38c` (the supplied last reviewed commit).
 The initial working tree was clean; no later user edits were present, reset or
@@ -127,3 +131,77 @@ actual manifests/submission bundles/workflow state, aggregates/reports/figures,
 synthetic examples/experiment artifacts, Slurm commands or HPC jobs were performed.
 Runtime correctness remains unverified. Stop here; the future operating sequence
 requires a separate explicit instruction and has not begun.
+
+## Historical-policy inspection/recovery source correction
+
+Correction baseline: clean `main` at
+`4035a6121738f0dc97ce86fa1d949350fa021c5f`. No subsequent user edits were present;
+no reset/discard was performed. The earlier Step 9 change retained declaration
+parsing for old global-split policies, but the CLI, registry root guard and writer
+preflight still required research readiness. Consequently old uncertain submission
+authority could not be resolved before adoption. The original static review missed
+this integration defect; this follow-up corrects the actual supported CLI path.
+
+Changed source:
+
+- `hpc_policy.py`: `require_recovery_ready` requires shared Linux/original registry
+  inputs, plus the original account for scheduler operations; it does not require
+  execution environment/data readiness or remove the original global split field.
+  `recovery_storage_overrides` projects only run-storage paths for lock evidence,
+  excluding both global data and split overrides.
+- `workflow_registry.py`: explicit existing-registry `recovery_only` access preserves
+  ownership/full-manifest/sealed-state/bundle validation and original policy
+  fingerprint equality before writes and under the controller. It cannot initialize
+  authority or adopt a different policy. Recovery leases cannot reserve work;
+  reconciliation validates its client policy. Adoption requires an explicitly
+  selected `previous_policy` matching stored authority at the same registry root.
+- `hpc_workflow.py`: old-policy status/reconcile/submission/terminal/lock recovery
+  use those prerequisites. `status --workflow-only` reports no scientific coverage;
+  non-null global-split status automatically does the same with explicit null/false/
+  diagnostic fields. Run-lock evidence never feeds that global split into scientific
+  computation or coverage. Non-submission proof rejects worker claims/residual
+  allocation locks. `adopt-policy --previous-policy` refuses unknown submission
+  identity, validates original terminal/non-submission proof and queries original
+  per-wave scheduler policy rather than substituting corrected policy values.
+- `slurm_client.py`: the submission backend explicitly rejects recovery leases
+  and retains research/submission readiness, including unsafe global-split rejection.
+
+Existing work/bundle/registry/lock-report schemas and scientific identity bytes are
+unchanged. Sealed old policy values, wave mappings, scheduler comments/IDs, proofs,
+allocation ordinals and old unpinned plans remain readable and preserved. New
+planning/rendering/submission/advance and allocation execution still require the
+corrected research-ready policy and current launch pins; old unpinned work cannot
+be executed through recovery. No source/software continuation or evaluation gate,
+training state, checkpoint binding or seed was relaxed or rewritten.
+
+Static traces inspected, without executing them:
+
+| Case | Actual current source decision |
+| --- | --- |
+| Old global-split status | CLI selects recovery-only registry read; `_read_state` validates original owner/seals/bundles and `read_workflow` retains stored fingerprint equality. `scientific=null`, coverage-collected=false and explicit diagnostic; no data/coverage collector. `--workflow-only` also supports otherwise non-ready historical environments. |
+| Corrected values supplied for old status/recovery | Original stored-policy equality rejects them. Existing ownership is validated before recovery lock writes and again under the lease; no replacement registry is initialized. |
+| Acknowledged-job reconciliation | Recovery-only open with original policy; exact registered scheduler identity/comment/account/index checks and residual allocation ownership retain reservation when terminal proof is incomplete. New operational snapshot retains the original policy, never runs research. |
+| Lost acknowledgement with an exact job ID | `resolve-submission --job-id [--cluster]` uses original policy/commands and existing scontrol membership verification before recording acknowledgement. No sbatch or replacement work. |
+| Explicit non-submission proof | Exact wave/comment/confirmed absence, audit reason, no worker claims and no residual allocation locks; immutable proof precedes original-policy state update. Absence/PID/age alone never resolves it. |
+| Residual controller/allocation/run ownership | `inspect-locks` validates original stored policy even when ordinary status is blocked by a controller lock. Exact unchanged owner/path/digest evidence plus all-owner inactivity confirmation is required for audit/archive release. Selected run scopes use storage-only overrides and verified evaluation binding where needed. |
+| Corrected-policy adoption | Required --previous-policy matches original stored fingerprint before writes and under controller; same registry root. Every submitted wave must have verified terminal evidence under original wave policy or matching immutable terminal proof; non-submitted waves must retain matching explicit proof with no acknowledgement/claims. Unknown submissions and residual allocation locks reject adoption. Old histories/ordinals persist. |
+| Historical missing launch pins / new execution | `_read_state`/validate_bundle retain old read compatibility. Recovery lease reservation/submission is rejected; research readiness and current renderer/submitter/runner launch-pin checks still apply to new execution. |
+
+The [operating guide](operating-guide.md#historical-policy-inspection-recovery-and-subsequent-adoption)
+now documents the actual sequence: original-policy workflow-only status; original
+acknowledged-job reconciliation or exact-ID/non-submission resolution; verified
+owner recovery and terminal evidence; then explicit corrected-policy adoption with
+both policy inputs, followed only by separately authorized fresh planning. The
+[Slurm guide](slurm-workflow.md) describes the new prerequisites/status fields and
+required adoption argument. These are future instructions; no commands were run.
+
+Correction Git inventory: seven modified tracked files (four source modules and
+three guides/progress documents), no untracked or staged files; branch/HEAD remain
+the correction baseline above. Nothing committed or pushed. Scientific and
+operational inputs remain unresolved; actual recovery, scheduler/output behavior,
+filesystem durability and runtime correctness remain unverified.
+
+Only source/documentation and Git inspection/editing occurred. No tests, project
+execution/imports, compilation/linting/executable verification, packages, artifacts,
+Slurm commands/submissions or HPC jobs were created or run. Stop after source work;
+runtime verification or operation still requires separate explicit authorization.

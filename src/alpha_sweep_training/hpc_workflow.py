@@ -92,6 +92,7 @@ def resolve_submission(workflow, wave_id, *, job_id=None, cluster=None, confirme
     if wave["scheduler"] is not None or wave["status"] != "submission_uncertain":
         raise WorkflowError("Only unresolved submission intent needs scheduler identity attachment/non-submission resolution")
     if job_id is not None:
+        workflow.policy.require_recovery_ready(scheduler=True)
         scheduler = SlurmClient(workflow.policy).verify_submission_identity(wave, job_id, cluster)
         workflow.record_acknowledgement(wave_id, scheduler)
         return {"outcome": "submission_identity_reconciled", "scheduler": scheduler}
@@ -100,6 +101,10 @@ def resolve_submission(workflow, wave_id, *, job_id=None, cluster=None, confirme
     same(evidence["wave_id"], wave_id, "non-submission evidence wave")
     same(evidence["scheduler_comment"], wave["scheduler_comment"], "non-submission evidence token")
     same(evidence["all_allocations_not_submitted_confirmed"], True, "non-submission confirmation")
+    for index in range(len(wave["items"])):
+        lock = relative_file(workflow.root, f"allocations/{wave_id}/{index}.lock")
+        if lock.exists() or _is_link(lock):
+            raise WorkflowError("Residual allocation ownership contradicts non-submission resolution; inspect and recover it explicitly")
     ref = immutable_json(workflow.root, f"resolutions/{uuid.uuid4().hex}.json", {"kind": "operator_confirmed_not_submitted",
         "evidence": evidence, "reason": reason, "recorded_at_utc": utc_now()})
     wave.update(status="confirmed_not_submitted", resolution=ref)
@@ -112,6 +117,7 @@ def resolve_terminal(workflow, wave_id, *, confirmed=False, evidence=None, reaso
     wave = workflow.wave(wave_id)
     if confirmed is not True or evidence is None or type(reason) is not str or not reason.strip() or wave["scheduler"] is None:
         raise WorkflowError("Require exact scheduler identity, actual authoritative terminal/inactive evidence for ALL allocations, explicit confirmation and reason")
+    workflow.policy.require_recovery_ready(scheduler=True)
     observation = SlurmClient(workflow.policy).observe_wave(wave)
     if any(row.get("queue_present") for row in observation["allocations"]):
         raise WorkflowError("Scheduler still reports a managed allocation; terminal confirmation cannot override it")
@@ -136,7 +142,9 @@ def resolve_terminal(workflow, wave_id, *, confirmed=False, evidence=None, reaso
 
 def inspect_managed_locks(manifest, policy, *, scope="workflow", run_id=None):
     """Exact ownership evidence only; no inactive-owner inference or writes."""
-    root = guarded_root(policy)
+    root = guarded_root(policy, recovery_only=True)
+    head, state = _read_state(root, manifest)
+    same(state["policy_fingerprint"], policy.fingerprint, "lock inspection original registry policy")
     paths, expected = [], {}
     if scope == "workflow":
         if run_id is not None:
@@ -146,7 +154,6 @@ def inspect_managed_locks(manifest, policy, *, scope="workflow", run_id=None):
             paths.append(controller)
             expected[str(controller)] = {"workflow_id": workflow_identity(manifest)}
             if (root / "owner.json").exists() and (root / "HEAD.json").exists():
-                _, state = _read_state(root, manifest)
                 for wave in state["waves"]:
                     for index in range(len(wave["items"])):
                         path = relative_file(root, f"allocations/{wave['wave_id']}/{index}.lock")
@@ -154,17 +161,20 @@ def inspect_managed_locks(manifest, policy, *, scope="workflow", run_id=None):
                         expected[str(path)] = {"workflow_id": workflow_identity(manifest), "wave_id": wave["wave_id"], "array_index": index}
     else:
         task = select_task(manifest, run_id=run_id)
-        config = task_config(task, policy.execution_overrides())
+        config = task_config(task, policy.recovery_storage_overrides())
         if scope == "training":
             from .recovery import inspect_locks
             rows = [e.__dict__ for e in inspect_locks(config, base_dir=policy.to_dict()["paths"]["base_dir"])]
+            same(read_json(relative_file(root, "HEAD.json")), head, "stable registry policy during run-lock inspection")
             return {"lock_report_version": 1, "workflow_id": workflow_identity(manifest), "scope": scope, "run_id": run_id, "locks": rows}
         if scope != "evaluation":
             raise WorkflowError("Unknown lock recovery scope")
         from .evaluation_inputs import bind_evaluation_checkpoint
         from .evaluation_persistence import evaluation_directory
         from .evaluation_protocol import prescribed_slots
-        inputs = bind_evaluation_checkpoint(task, base_dir=policy.to_dict()["paths"]["base_dir"], overrides=policy.execution_overrides())
+        if policy.to_dict()["paths"]["evaluation_root"] is None:
+            raise WorkflowError("Evaluation lock inspection requires the original paths.evaluation_root")
+        inputs = bind_evaluation_checkpoint(task, base_dir=policy.to_dict()["paths"]["base_dir"], overrides=policy.recovery_storage_overrides())
         namespace = evaluation_directory(inputs, evaluation_root=policy.to_dict()["paths"]["evaluation_root"])
         paths = [namespace / ".namespace.lock", namespace / ".sweep.lock",
                  *(namespace / "locks" / f"{s.slot_id}.lock" for s in prescribed_slots())]
@@ -181,6 +191,7 @@ def inspect_managed_locks(manifest, policy, *, scope="workflow", run_id=None):
         owner = read_json(path)
         validate_operational_lock(owner, expected[str(path)])
         rows.append({"path": str(path), "sha256": digest_file(path), "owner": owner})
+    same(read_json(relative_file(root, "HEAD.json")), head, "stable registry policy during lock inspection")
     return {"lock_report_version": 1, "workflow_id": workflow_identity(manifest), "scope": scope, "run_id": run_id, "locks": rows}
 
 
@@ -195,7 +206,7 @@ def release_managed_locks(manifest, policy, evidence, *, confirmed=False, reason
     if scope == "training":
         from .recovery import LockEvidence, release_confirmed_locks
         task = select_task(manifest, run_id=run_id)
-        return release_confirmed_locks(task_config(task, policy.execution_overrides()), base_dir=policy.to_dict()["paths"]["base_dir"],
+        return release_confirmed_locks(task_config(task, policy.recovery_storage_overrides()), base_dir=policy.to_dict()["paths"]["base_dir"],
             expected=tuple(LockEvidence(**row) for row in actual["locks"]), inactive_owners_confirmed=True, reason=reason)
     recovered = []
     for row in actual["locks"]:
@@ -233,6 +244,7 @@ def main(argv=None):
             cmd.add_argument("--submit", action="store_true")
         if name == "status":
             cmd.add_argument("--scheduler", action="store_true")
+            cmd.add_argument("--workflow-only", action="store_true", help="Inspect historical registry authority without collecting scientific coverage or requiring a research environment")
         if name == "resolve-submission":
             cmd.add_argument("--wave-id", required=True)
             group = cmd.add_mutually_exclusive_group(required=True)
@@ -243,6 +255,7 @@ def main(argv=None):
             cmd.add_argument("--reason")
         if name == "adopt-policy":
             cmd.add_argument("--reason", required=True)
+            cmd.add_argument("--previous-policy", required=True, help="Original sealed current policy; must match the stored fingerprint before corrected-policy adoption")
         if name == "resolve-terminal":
             cmd.add_argument("--wave-id", required=True)
             cmd.add_argument("--evidence", required=True)
@@ -263,7 +276,15 @@ def main(argv=None):
         if args.command == "inspect-restrictions":
             result = SlurmClient(policy).inspect_restrictions()
         else:
-            policy.require_ready()
+            recovery_commands = {"status", "reconcile", "resolve-submission", "resolve-terminal", "inspect-locks", "release-locks"}
+            recovery_only = args.command in recovery_commands
+            if recovery_only:
+                scheduler_recovery = (args.command in ("reconcile", "resolve-terminal")
+                    or (args.command == "status" and args.scheduler)
+                    or (args.command == "resolve-submission" and args.job_id is not None))
+                policy.require_recovery_ready(scheduler=scheduler_recovery)
+            else:
+                policy.require_ready()
             manifest = load_manifest(args.manifest)
             manifest_path = str(Path(args.manifest).expanduser().absolute())
             shared_path(manifest_path, "shared full manifest path")
@@ -271,10 +292,17 @@ def main(argv=None):
                 result = build_work_plan(manifest, policy, manifest_path=manifest_path, state=read_workflow(manifest, policy),
                     retry_run_ids=args.retry_run_id, retry_reason=args.retry_reason)
             elif args.command == "status":
-                state = read_workflow(manifest, policy)
-                from .evaluation_execution import collect_experiment_coverage
-                result = {"workflow": state, "scientific": collect_experiment_coverage(manifest,
-                    base_dir=policy.to_dict()["paths"]["base_dir"], overrides=policy.execution_overrides(), evaluation_root=policy.to_dict()["paths"]["evaluation_root"])}
+                historical_only = args.workflow_only or policy.to_dict()["paths"]["split_file"] is not None
+                state = read_workflow(manifest, policy, recovery_only=historical_only)
+                result = {"workflow": state, "scientific": None,
+                          "scientific_coverage_collected": False, "scientific_coverage_diagnostic": None}
+                if historical_only:
+                    result["scientific_coverage_diagnostic"] = "Workflow-only historical inspection: scientific coverage was not collected; the original policy remains sealed and any global split override cannot authorize research execution"
+                else:
+                    from .evaluation_execution import collect_experiment_coverage
+                    result["scientific"] = collect_experiment_coverage(manifest,
+                        base_dir=policy.to_dict()["paths"]["base_dir"], overrides=policy.execution_overrides(), evaluation_root=policy.to_dict()["paths"]["evaluation_root"])
+                    result["scientific_coverage_collected"] = True
                 if args.scheduler:
                     result["scheduler"] = [{"wave_id": wave["wave_id"], **SlurmClient(policy).observe_wave(wave)} for wave in state["waves"] if wave["status"] != "confirmed_not_submitted"]
             elif args.command == "inspect-locks":
@@ -284,7 +312,9 @@ def main(argv=None):
                     confirmed=args.confirmed_inactive_owners, reason=args.reason)}
             else:
                 with open_workflow(manifest, policy, initialize=args.command in ("render", "submit", "advance"),
-                                   adopting_policy=args.command == "adopt-policy") as workflow:
+                                   adopting_policy=args.command == "adopt-policy",
+                                   previous_policy=load_policy(args.previous_policy) if args.command == "adopt-policy" else None,
+                                   recovery_only=recovery_only) as workflow:
                     if args.command == "render":
                         plan = read_json(args.plan)
                         same(plan["manifest_path"], manifest_path, "render full manifest path")
@@ -319,9 +349,28 @@ def main(argv=None):
                     else:  # adopt-policy requires all allocations conclusively terminal first.
                         old_policy = workflow.state["policy_fingerprint"]
                         for wave in workflow.state["waves"]:
-                            resolved_terminal = wave["resolution"] is not None and read_reference(workflow.root, wave["resolution"])["kind"] == "operator_confirmed_terminal"
-                            if wave["status"] != "confirmed_not_submitted" and not resolved_terminal and not SlurmClient(policy).observe_wave(wave)["terminal"]:
-                                raise WorkflowError("Cannot adopt policy while allocations/submission state are uncertain or active")
+                            if wave["status"] == "confirmed_not_submitted":
+                                if wave["scheduler"] is not None or wave["claims"] or wave["resolution"] is None:
+                                    raise WorkflowError("Non-submission must have its original proof and no scheduler acknowledgement/worker claims before policy adoption")
+                                resolution = read_reference(workflow.root, wave["resolution"])
+                                same(resolution["kind"], "operator_confirmed_not_submitted", "adoption non-submission resolution")
+                                same(resolution["evidence"]["wave_id"], wave["wave_id"], "adoption non-submission wave")
+                                same(resolution["evidence"]["scheduler_comment"], wave["scheduler_comment"], "adoption non-submission token")
+                                same(resolution["evidence"]["all_allocations_not_submitted_confirmed"], True, "adoption original non-submission proof")
+                            else:
+                                if wave["scheduler"] is None:
+                                    raise WorkflowError("Resolve the original uncertain submission before adopting a corrected policy")
+                                resolution = None if wave["resolution"] is None else read_reference(workflow.root, wave["resolution"])
+                                resolved_terminal = resolution is not None and resolution["kind"] == "operator_confirmed_terminal"
+                                if resolved_terminal:
+                                    same(resolution["wave_id"], wave["wave_id"], "adoption terminal-resolution wave")
+                                    same(resolution["scheduler"], wave["scheduler"], "adoption terminal-resolution scheduler")
+                                else:
+                                    from .hpc_policy import OperationalPolicy
+                                    original_wave_policy = OperationalPolicy(wave["policy"])
+                                    original_wave_policy.require_recovery_ready(scheduler=True)
+                                    if not SlurmClient(original_wave_policy).observe_wave(wave)["terminal"]:
+                                        raise WorkflowError("Cannot adopt policy while original allocations/submission state are uncertain or active")
                             for index in range(len(wave["items"])):
                                 path = relative_file(workflow.root, f"allocations/{wave['wave_id']}/{index}.lock")
                                 if path.exists() or _is_link(path):

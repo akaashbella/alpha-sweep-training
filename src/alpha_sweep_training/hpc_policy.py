@@ -151,6 +151,30 @@ class OperationalPolicy:
     def fingerprint(self):
         return content_identity(self._document)[7:]
 
+    def require_recovery_ready(self, *, scheduler=False):
+        """Existing-registry operations need no research environment/data readiness.
+
+        The original declaration remains intact, including a historical global
+        split. This gate authorizes neither coverage under that split nor compute.
+        """
+        if os.name != "posix":
+            raise WorkflowError("Workflow recovery requires the shared Linux HPC environment")
+        doc = self.to_dict()
+        if doc["paths"]["workflow_root"] is None:
+            raise WorkflowError("Historical recovery requires the original paths.workflow_root")
+        if scheduler and doc["resources"]["account"] is None:
+            raise WorkflowError("Scheduler recovery requires the original explicit Slurm account")
+
+    def recovery_storage_overrides(self):
+        """Locate owned run locks only; never apply global data/split overrides."""
+        self.require_recovery_ready()
+        paths = self.to_dict()["paths"]
+        keys = ("output_root", "checkpoint_root", "result_root", "log_root")
+        pending = [f"paths.{key}" for key in ("base_dir", *keys) if paths[key] is None]
+        if pending:
+            raise WorkflowError("Owned run-lock inspection requires original storage paths: " + ", ".join(pending))
+        return {f"execution.storage.{key}": paths[key] for key in keys}
+
     def require_ready(self, *, submission=False):
         if os.name != "posix":
             raise WorkflowError("Operational execution requires the shared Linux HPC environment; declarations remain valid on other platforms")
@@ -159,7 +183,7 @@ class OperationalPolicy:
         # legacy key for reading sealed policies, but never execute a global
         # split override against the two-dataset grid.
         if doc["paths"]["split_file"] is not None:
-            raise WorkflowError("Leave paths.split_file null: the full workflow inherits each dataset's finalized manifest split; a global split override is unsafe. Replan, or explicitly adopt the corrected policy after quiescence.")
+            raise WorkflowError("New planning/execution requires paths.split_file null to inherit each dataset's finalized manifest split; a global split override is unsafe. Use workflow-only status and scheduler recovery with the original sealed policy first, then explicitly adopt a corrected policy after authoritative quiescence.")
         pending = [f"paths.{k}" for k, v in doc["paths"].items() if v is None and k != "split_file"]
         if doc["resources"]["account"] is None:
             pending.append("resources.account (actual Slurm research/class account, never an ONID fallback)")

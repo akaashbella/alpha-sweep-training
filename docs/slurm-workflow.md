@@ -169,6 +169,23 @@ scripts or other users' jobs. Its version-1 owner links the full manifest. Curre
 policy is in sealed state snapshots and changes only through explicit `adopt-policy`
 after all allocations are conclusively terminal and leases gone. Changing policy
 does not relax unfinished-training source/software checks or reset attempt counts.
+Adoption requires `--previous-policy` containing the exact currently sealed policy
+and `--policy` containing the reviewed corrected policy at the same registry root.
+Original fingerprint equality is checked before writes and under the controller;
+per-wave scheduler evidence uses original sealed policy values.
+
+Existing-registry inspection/reconciliation/recovery uses
+`require_recovery_ready`, separate from research `require_ready`. A historical
+non-null global split does not block workflow-only `status`, `reconcile`,
+`resolve-submission`, `resolve-terminal` or exact lock inspection/recovery. These
+paths validate existing ownership/seals and the unchanged selected policy; they
+cannot initialize replacement authority, reserve work or submit through a recovery
+lease. `status --workflow-only` skips scientific coverage and requires no research
+environment readiness. Plain status under a non-null global split does the same,
+returning scientific=null and an explicit coverage-not-collected diagnostic. New
+planning/rendering/submission/allocation execution still reject that split policy.
+Run-lock recovery projects only original run-storage paths, never global data/split
+overrides. See the [historical-policy recovery sequence](operating-guide.md#historical-policy-inspection-recovery-and-subsequent-adoption).
 
 ```text
 workflow_root/
@@ -345,10 +362,12 @@ alpha-sweep-workflow inspect-locks --manifest "$FULL_MANIFEST" --policy "$POLICY
   --scope training --run-id "$EXACT_RUN_ID" > "$LOCK_EVIDENCE"
 alpha-sweep-workflow release-locks --manifest "$FULL_MANIFEST" --policy "$POLICY" \
   --evidence "$LOCK_EVIDENCE" --confirmed-inactive-owners --reason "$INACTIVITY_PROOF_REASON"
-alpha-sweep-workflow adopt-policy --manifest "$FULL_MANIFEST" --policy "$REVIEWED_NEW_POLICY" --reason "$POLICY_REASON"
+alpha-sweep-workflow adopt-policy --manifest "$FULL_MANIFEST" --policy "$REVIEWED_NEW_POLICY" \
+  --previous-policy "$ORIGINAL_POLICY" --reason "$POLICY_REASON"
 ```
 
 Plan/render never call sbatch. Status adds scheduler queries only with --scheduler;
+`status --workflow-only` is the explicit historical registry-only reader.
 reconcile/advance explicitly query and publish workflow observations. Exit 0 means
 the operation/report succeeded, not scientific completion. Allocation exits retain
 0/10/20/21/22 for selected work success/interruption/numerical/execution/rejection.

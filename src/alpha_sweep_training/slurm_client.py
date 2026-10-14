@@ -190,6 +190,9 @@ class SlurmClient:
         if not isinstance(workflow, WorkflowLease):
             raise WorkflowError("Submission requires the concrete shared workflow authority")
         workflow.guard()
+        if workflow.recovery_only:
+            raise WorkflowError("Historical recovery authority cannot submit jobs")
+        self.policy.require_ready(submission=True)
         wave = workflow.wave(wave_id)
         same(wave["policy_fingerprint"], self.policy.fingerprint, "submission client policy")
         same(wave["submission_arguments"], list(arguments), "durable exact submission intent")

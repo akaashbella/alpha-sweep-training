@@ -102,8 +102,10 @@ Old version-1 plans/bundles lacking `launch_inputs` remain readable for workflow
 ownership/reconciliation, but cannot render, submit or execute under this source.
 Preserve uncertain old intents; resolve them before creating new reviewed work.
 Legacy policies with a non-null global split remain parseable as historical state,
-but operational readiness rejects them. A corrected policy requires explicit
-`adopt-policy` after proven quiescence when a registry already exists.
+and current workflow inspection/reconciliation/recovery can use their original
+sealed policy without research readiness. New planning/execution readiness rejects
+them. Follow the historical-policy sequence below before corrected-policy adoption;
+never substitute corrected values into an unresolved registry's historical evidence.
 
 ### 4. Obtain real runtime and operational capability evidence
 
@@ -348,7 +350,7 @@ ArtifactReference for unfinished terminal evidence only, never a fabricated file
 | Delayed/missing accounting | `reconcile` keeps the entire wave reserved. Empty queue/PID/age are insufficient. Complete matching terminal accounting for every array index, or explicit authoritative `resolve-terminal` proof, is required. |
 | Hard termination/node failure/residual owners | Obtain cross-node scheduler/admin inactivity evidence for every owner. `inspect-locks` then `release-locks --confirmed-inactive-owners --reason` requires the exact unchanged report and archives locks with audit; it never marks science complete. Afterwards reconcile and make an explicit execution-retry/recovery decision. |
 | Concurrent controllers | Compatible contention blocks a competing controller; workers wait only within the configured bound. Reinspect after release, never steal or start a second registry. |
-| Exhausted allocation intents | Preserve exhaustion and all intent/outcome history. No automatic reset. Any operational policy revision needs explicit reviewed `adopt-policy --reason` after proven quiescence; this cannot relax scientific/source compatibility. |
+| Exhausted allocation intents | Preserve exhaustion and all intent/outcome history. No automatic reset. Any operational policy revision needs explicit reviewed `adopt-policy --previous-policy --reason` after proven quiescence; this cannot relax scientific/source compatibility. |
 
 Exact CLI recipes and evidence payloads/validation are in
 [slurm-workflow.md](slurm-workflow.md) and
@@ -357,6 +359,128 @@ authorization from local PIDs/age or removes another active owner's lock. Do not
 delete partial/orphan evidence, edit sealed state, blind-resubmit, or restart training
 because robustness is incomplete. Unsupported private scripts, manual `sbatch` and
 outside requeues are beyond registry control and are not supported operating paths.
+
+## Historical-policy inspection, recovery and subsequent adoption
+
+This is a future, separately authorized operator sequence. No command was run
+during this correction. `$ORIGINAL_POLICY` must contain the exact current policy
+sealed in the existing registry, including its historical non-null `paths.split_file`.
+Use its original registry root and the original full manifest. Do not edit that
+policy to satisfy new research readiness; fingerprint mismatches still reject.
+An absent, partial, corrupt, linked or unowned registry is not initialized or
+reconstructed by this recovery path.
+
+Recovery requires shared Linux access, the original registry and full-manifest
+ownership/seals. Scheduler operations additionally need the original explicit
+account/command configuration and actual scheduler access. They do not require
+the historical activation/interpreter to still exist, launch pins, prepared-data
+availability or readiness to train. Generic declaration validity still applies.
+
+1. Inspect existing authority on the submit node:
+
+   ```bash
+   alpha-sweep-workflow status --manifest "$FULL_MANIFEST" --policy "$ORIGINAL_POLICY" --workflow-only
+   alpha-sweep-workflow status --manifest "$FULL_MANIFEST" --policy "$ORIGINAL_POLICY" --workflow-only --scheduler
+   ```
+
+   `--workflow-only` explicitly suppresses scientific coverage. A non-null global
+   split also makes plain workflow `status` automatically use this mode. Output
+   has `scientific=null`, `scientific_coverage_collected=false` and a diagnostic;
+   it makes no claim about dataset or training/evaluation coverage. Without
+   `--scheduler`, no scheduler query occurs. A controller lock blocks status;
+   use the exact lock-inspection path below if it remains after hard termination.
+
+2. For an already acknowledged job, reconcile with the original policy:
+
+   ```bash
+   alpha-sweep-workflow reconcile --manifest "$FULL_MANIFEST" --policy "$ORIGINAL_POLICY"
+   ```
+
+   This writes a new sealed operational observation under the original policy,
+   preserving old waves/bundles and their recorded scheduler identity. Terminal
+   evidence requires complete exact array accounting and no residual allocation
+   ownership; missing/unknown accounting retains the reservation.
+
+3. For a lost acknowledgement, choose the evidence-supported branch:
+
+   ```bash
+   alpha-sweep-workflow resolve-submission --manifest "$FULL_MANIFEST" --policy "$ORIGINAL_POLICY" \
+     --wave-id "$EXACT_WAVE_ID" --job-id "$EXACT_ARRAY_JOB_ID" --cluster "$ACTUAL_CLUSTER"
+   ```
+
+   Supply `--cluster` only when the actual cluster is known; otherwise omit it.
+   The existing scontrol verification must match the original exact comment,
+   account, partition, array root and bounded task selector. Afterwards reconcile
+   with the original policy. If no scheduler identity can be verified, retain
+   uncertainty; an empty queue never authorizes replacement.
+
+   Only if actual authoritative evidence proves **no allocation was submitted**:
+
+   ```bash
+   alpha-sweep-workflow resolve-submission --manifest "$FULL_MANIFEST" --policy "$ORIGINAL_POLICY" \
+     --wave-id "$EXACT_WAVE_ID" --confirmed-not-submitted \
+     --evidence "$ACTUAL_NON_SUBMISSION_PROOF" --reason "$PROOF_REASON"
+   ```
+
+   The proof must retain the exact `wave_id`, `scheduler_comment` and
+   `all_allocations_not_submitted_confirmed=true`, backed by operator/admin evidence.
+   Existing worker claims or residual allocation locks prohibit this branch.
+   The proof/intent remain immutable; this is not resubmission permission.
+
+4. For residual ownership, inspect before any confirmed release:
+
+   ```bash
+   alpha-sweep-workflow inspect-locks --manifest "$FULL_MANIFEST" --policy "$ORIGINAL_POLICY" \
+     --scope workflow > "$NEW_LOCK_EVIDENCE"
+   alpha-sweep-workflow release-locks --manifest "$FULL_MANIFEST" --policy "$ORIGINAL_POLICY" \
+     --evidence "$NEW_LOCK_EVIDENCE" --confirmed-inactive-owners --reason "$INACTIVITY_PROOF_REASON"
+   ```
+
+   These commands validate the original stored policy even when a controller lock
+   blocks ordinary status. Require actual inactivity of **all** recorded owners
+   across nodes, exact unchanged path/owner/digest evidence, and an audit reason.
+   Release archives locks; it never deletes or steals active ownership. If relevant
+   training/evaluation locks also remain, inspect the selected `--scope training`
+   or `--scope evaluation --run-id "$EXACT_RUN_ID"` (both run scopes need `--run-id`)
+   and release each exact report only after its own verified inactivity. Run-lock
+   paths use original run storage only, excluding both global data_root and split
+   overrides; evaluation scope also requires a verified best binding/original
+   evaluation root. This is lock evidence, not scientific coverage or computation.
+
+5. After ownership recovery, reconcile again. If acknowledged-job accounting
+   cannot supply full terminal evidence, use the existing explicit proof path:
+
+   ```bash
+   alpha-sweep-workflow resolve-terminal --manifest "$FULL_MANIFEST" --policy "$ORIGINAL_POLICY" \
+     --wave-id "$EXACT_WAVE_ID" --evidence "$ACTUAL_TERMINAL_PROOF" \
+     --confirmed-terminal-inactive-owners --reason "$TERMINAL_PROOF_REASON"
+   ```
+
+   The proof binds the exact workflow/wave/comment and all recorded array indices,
+   with actual terminal/inactive-owner evidence for each. Visible queue membership
+   or residual allocation leases reject it. Unknown accounting alone is not proof.
+   Reinspect workflow-only status: every wave must be conclusively terminal or
+   explicitly proven not submitted, with submission/ownership ambiguity resolved.
+
+6. Only then adopt the separately reviewed research-ready corrected policy:
+
+   ```bash
+   alpha-sweep-workflow adopt-policy --manifest "$FULL_MANIFEST" --policy "$REVIEWED_NEW_POLICY" \
+     --previous-policy "$ORIGINAL_POLICY" --reason "$POLICY_REASON"
+   ```
+
+   The new policy must leave split_file null and retain the same registry location.
+   Adoption verifies the previous policy fingerprint before writes and under the
+   controller lease. It checks original per-wave scheduler policy/identities and
+   preserved terminal/non-submission proofs, refuses unresolved submissions/owners,
+   and preserves old mappings, policies, evidence and allocation ordinals. A corrected
+   policy cannot authorize resolving old uncertainty in place of the original one.
+
+7. Future new planning uses the adopted policy and new launch-pinned work. Old
+   unpinned plans/bundles remain readable during this entire recovery sequence but
+   cannot render, submit or run under current source. No recovery lease can reserve
+   or submit new work. Unfinished-training source/software equality and independent
+   evaluation compatibility remain unchanged; adoption is not a migration permit.
 
 ## Unresolved-input register
 

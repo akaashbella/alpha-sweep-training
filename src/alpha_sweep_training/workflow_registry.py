@@ -75,8 +75,11 @@ def controller_lock(root, manifest, policy, *, wait=False, stop=None):
         manager.__exit__(None, None, None)
 
 
-def guarded_root(policy):
-    policy.require_ready()
+def guarded_root(policy, *, recovery_only=False):
+    if recovery_only:
+        policy.require_recovery_ready()
+    else:
+        policy.require_ready()
     root = Path(policy.to_dict()["paths"]["workflow_root"])
     for part in (root, *root.parents):
         if _is_link(part):
@@ -174,9 +177,11 @@ def _read_state(root, manifest):
     return head, state
 
 
-def read_workflow(manifest, policy):
-    root = guarded_root(policy)
+def read_workflow(manifest, policy, *, recovery_only=False):
+    root = guarded_root(policy, recovery_only=recovery_only)
     if not root.exists():
+        if recovery_only:
+            raise WorkflowError("Historical recovery requires an existing owned registry; do not initialize a replacement")
         return {"waves": [], "revision": 0}
     lock = root / ".controller.lock"
     if lock.exists() or _is_link(lock):
@@ -198,6 +203,7 @@ class WorkflowLease:
     state: dict
     controller_owner: dict | None = None
     active: bool = True
+    recovery_only: bool = False
 
     def guard(self):
         if not self.active:
@@ -232,6 +238,9 @@ class WorkflowLease:
 
     def reserve(self, bundle, bundle_reference, submission_arguments):
         self.guard()
+        if self.recovery_only:
+            raise WorkflowError("A historical recovery lease cannot reserve or execute new work")
+        self.policy.require_ready(submission=True)
         if any(w["status"] not in ("terminal", "confirmed_not_submitted") for w in self.state["waves"]):
             raise WorkflowError("Previous wave is not conclusively terminal; pending/running/unknown allocations reserve capacity")
         if any(w["wave_id"] == bundle["wave_id"] for w in self.state["waves"]):
@@ -257,6 +266,8 @@ class WorkflowLease:
 
     def reconcile(self, client):
         self.guard()
+        self.policy.require_recovery_ready(scheduler=True)
+        same(client.policy.fingerprint, self.policy.fingerprint, "reconciliation client/current sealed policy")
         for wave in self.state["waves"]:
             if wave["status"] == "confirmed_not_submitted":
                 continue
@@ -309,20 +320,38 @@ class WorkflowLease:
 
 
 @contextmanager
-def open_workflow(manifest, policy, *, initialize=False, adopting_policy=False, wait=False, stop=None):
-    root = guarded_root(policy)
+def open_workflow(manifest, policy, *, initialize=False, adopting_policy=False,
+                  previous_policy=None, recovery_only=False, wait=False, stop=None):
+    if recovery_only and (initialize or adopting_policy):
+        raise WorkflowError("Historical recovery only opens existing authority; initialization/adoption are separate operations")
+    if adopting_policy:
+        if initialize or not isinstance(previous_policy, OperationalPolicy):
+            raise WorkflowError("Policy adoption requires the explicitly selected original previous_policy and an existing registry")
+        previous_policy.require_recovery_ready()
+        same(previous_policy.to_dict()["paths"]["workflow_root"], policy.to_dict()["paths"]["workflow_root"],
+             "original/corrected registry location")
+    elif previous_policy is not None:
+        raise WorkflowError("previous_policy only applies to explicit policy adoption")
+    root = guarded_root(policy, recovery_only=recovery_only)
     from .artifacts import resolve_run_paths
     from .manifests import task_config
-    operational_roots = [Path(policy.to_dict()["paths"][key]) for key in ("workflow_root", "slurm_log_root", "evaluation_root")]
-    for task in manifest.tasks:
-        run_paths = resolve_run_paths(task_config(task, policy.execution_overrides()), policy.to_dict()["paths"]["base_dir"])
-        for managed in run_paths.directories():
-            if any(path == managed or managed in path.parents or path in managed.parents for path in operational_roots):
-                raise WorkflowError("Operational roots must not overlap any protected scientific run directory")
+    if not recovery_only:
+        operational_roots = [Path(policy.to_dict()["paths"][key]) for key in ("workflow_root", "slurm_log_root", "evaluation_root")]
+        for task in manifest.tasks:
+            run_paths = resolve_run_paths(task_config(task, policy.execution_overrides()), policy.to_dict()["paths"]["base_dir"])
+            for managed in run_paths.directories():
+                if any(path == managed or managed in path.parents or path in managed.parents for path in operational_roots):
+                    raise WorkflowError("Operational roots must not overlap any protected scientific run directory")
     if not root.exists() and not initialize:
         raise WorkflowError("Workflow registry is absent; render/submit/advance initialize it explicitly")
     if root.exists() and not root.is_dir():
         raise WorkflowError("Workflow root is not a directory")
+    expected_policy = previous_policy if adopting_policy else policy
+    if recovery_only or adopting_policy:
+        # Validate exact existing ownership/seals/policy before any lock write;
+        # repeat under the controller lease below. No scientific overrides.
+        _, prior_state = _read_state(root, manifest)
+        same(prior_state["policy_fingerprint"], expected_policy.fingerprint, "selected historical registry policy")
     durable_mkdir(root)
     with controller_lock(root, manifest, policy, wait=wait, stop=stop) as controller_owner:
         owner = relative_file(root, "owner.json")
@@ -334,9 +363,9 @@ def open_workflow(manifest, policy, *, initialize=False, adopting_policy=False, 
             lease.commit({"kind": "initialized"})
         else:
             head, state = _read_state(root, manifest)
-            if not adopting_policy:
-                same(state["policy_fingerprint"], policy.fingerprint, "current workflow execution policy")
-            lease = WorkflowLease(root, manifest, policy, head, deepcopy(state), controller_owner=deepcopy(controller_owner))
+            same(state["policy_fingerprint"], expected_policy.fingerprint, "current workflow policy (original policy required for adoption)")
+            lease = WorkflowLease(root, manifest, policy, head, deepcopy(state),
+                                  controller_owner=deepcopy(controller_owner), recovery_only=recovery_only)
         try:
             yield lease
         finally:
