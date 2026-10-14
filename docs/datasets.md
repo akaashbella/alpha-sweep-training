@@ -257,7 +257,10 @@ There is no data RNG cursor at a completed-epoch boundary and no speculative
 mid-batch resume. An unfinished epoch is replayed from the last committed boundary.
 
 After moving shared data, preserve raw and prepared content and update both
-operational data_root and split_file overrides. Do not rewrite checksummed shared
+operational data_root and split_file in each dataset's separate research input
+before rebuilding/reviewing its full manifest. A single-task override may select
+that task's split; full-workflow policy must leave paths.split_file null and
+inherit per-dataset manifest paths. Do not rewrite checksummed shared
 YAML just to change paths; the original preparation config remains a provenance
 snapshot. Source/split/normalization/preprocessing identities are location-free.
 

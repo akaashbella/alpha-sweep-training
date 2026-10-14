@@ -1,5 +1,11 @@
 # Step 8 source progress
 
+Historical Step 8 record. Its stopping point and Git inventory describe that
+implementation turn. Final source integration is now recorded in
+[step9-progress.md](step9-progress.md); future operation requires separate explicit
+authorization under [operating-guide.md](operating-guide.md). No earlier execution
+is claimed retroactively.
+
 Baseline: clean working tree at reviewed local/remote HEAD
 `45ce5507ca3d702c265f84b503744e7d48d5bbfc`. No reset or user-edit replacement.
 

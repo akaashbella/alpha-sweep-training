@@ -76,7 +76,9 @@ lost completion acknowledgement must be reconciled before any rerun/resubmission
 Step 6's [manifest/controller guide](manifests-and-controller.md) documents
 `alpha-sweep` commands and `load_manifest`, `load_phase`, `select_task`,
 `inspect_task`, `collect_coverage`, `dispatch`, `execute_task`, TaskOutcome/ExitCode.
-Each task command handles one process/GPU; phase scheduling is a Step 7 responsibility.
+Each task command handles one process/GPU and enforces the phase-2 computation
+gate; Step 7 owns shared cluster scheduling. Count-200 publication is independent
+of that computation gate, with zero additional epochs.
 `alpha-sweep evaluate` handles one checkpoint and one or a selected group of
 evaluation slots; 6,720 logical slots do not imply 6,720 jobs. The training grid
 stays 240 tasks/two 120-task phases. `evaluation-plan`, `evaluation-inspect` and
@@ -103,4 +105,8 @@ OSU's [published dgxh policy](https://it.engineering.oregonstate.edu/hpc/slurm-h
 consulted 2026-10-13, caps aggregate GPU-time at 48 GPU-hours; four one-GPU twelve-hour
 requests consume that allowance. Unknown submissions/scheduler state retain the
 entire wave's reservation. Training ordering is CIFAR-10 first; pending evaluation
-does not block otherwise eligible CIFAR-100 training. See the operating guide.
+does not block otherwise eligible CIFAR-100 training. See the
+[end-to-end operating guide](operating-guide.md) for the twelve-step future sequence,
+launch pinning, recovery tables and unresolved capability/verification inputs.
+All nine steps are complete in source only. A separate explicit instruction is
+required before environment setup, verification or execution; stop at source handoff.

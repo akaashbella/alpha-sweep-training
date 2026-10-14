@@ -2,7 +2,9 @@
 
 Step 8 is implemented in source only. No code, tests, imports, compilation/linting,
 installations, research/reporting artifacts, figures or Slurm/HPC operations were
-run. Runtime correctness remains unverified. Stop before Step 9 final integration.
+run. Runtime correctness remains unverified. Step 9 completes source integration;
+[operating-guide.md](operating-guide.md) provides the ordered future handoff.
+Do not run reporting or any setup/verification until separately explicitly authorized.
 
 ## Readers and frozen observations
 
@@ -217,4 +219,5 @@ unsafe output or failed production operation exits 22 with an explicit diagnosti
 Step 9 can consume `collect_results`, `validate_collection`, `summarize_results`,
 validation-only selection, collection/summaries publishers, `load_collection`,
 `inspect_report` and `plot_results`, plus the reporting conventions, seals and
-per-file references. No final integration or actual results/figures were generated.
+per-file references. Final source integration is recorded in
+[step9-progress.md](step9-progress.md); no actual results/figures were generated.

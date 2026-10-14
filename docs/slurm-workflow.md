@@ -4,8 +4,10 @@ Step 7 is implemented in source only. None of the commands below was executed.
 No tests, project imports/execution, compilation/linting, environment installation,
 downloads/preparation, models, research manifests, workflow artifacts, rendered
 bundles, training/evaluation/results, experiments or Slurm/HPC commands/jobs were
-created or run during implementation. Runtime correctness is unverified. Stop
-before Step 8 aggregation/plotting; runtime verification follows all nine steps.
+created or run during implementation. Runtime correctness is unverified. All nine
+steps are now complete in source; [operating-guide.md](operating-guide.md) orders
+future operation and recovery. Stop at source handoff; execution needs a separate
+explicit instruction.
 
 ## Operational inputs and policy
 
@@ -24,7 +26,11 @@ CPU/RAM, wall time, global cap, workers, threads, optional GPU feature constrain
 environment activation/modules and warning lead are operational. No individual
 node or H100/H200 feature is selected by default. Operational directories cannot
 overlap protected run directories or each other. Paths cannot contain control
-characters, traversal or Slurm '%' filename expansions.
+characters, traversal or Slurm '%' filename expansions. `paths.split_file` stays
+null to inherit each dataset's finalized manifest split; a non-null legacy global
+override is rejected at operational readiness. Historical sealed policies still
+validate as declarations. Relocation requires correctly paired data_root/split_file
+in each separate research input before manifest build, preserving prepared YAML.
 
 Defaults are unmeasured requests: eight CPUs, 32G memory, twelve hours, four
 allocations across the workflow and 600 seconds warning. Four loader workers and
@@ -103,9 +109,11 @@ See [Slurm resource-limit rules](https://slurm.schedmd.com/resource_limits.html)
 `build_work_plan` validates the full parent manifest and actual execution source/
 software. It reuses stored training coverage, checkpoint binding and evaluation
 slot/sweep coverage. Training remains 240 tasks/two 120-task dataset views, with
-original indices, identities and 200 epochs. Phase-2 training requires verified
+original indices, identities and 200 epochs. Phase-2 training computation requires verified
 successful completion of **all 120** phase-1 training tasks. Terminal failures
 never satisfy that gate. Pending robustness never blocks CIFAR-100 training.
+Publication-only finalization of already verified count-200 authority is exempt
+from the computation gate in planner, runner and manual executor; it adds no epochs.
 
 One training work item is one exact manifest task. One evaluation work item is
 one verified immutable best checkpoint/protocol, processing all prescribed
@@ -138,10 +146,18 @@ transaction. Evaluation additionally carries the actual best generation/SHA,
 protocol identity and full binding. No placeholder digest is created for untrained
 tasks. Plans and bundles seal full manifest grid/document digest, policy snapshot/
 fingerprint and actual planned source/software. The deterministic execution pin
-contains the imported-source inventory/digest and software versions; process IDs,
+contains the imported-source inventory/digest, software versions and version-1
+external `launch_inputs` (activation script bytes, configured/resolved interpreter
+path/bytes and declared modules); process IDs,
 timestamps and allocation metadata belong to actual execution provenance. Workers reject unknown/altered
 membership, source/software, policies, selectors and checkpoint bindings. Seeds,
 training fingerprints and scientific state never include operational fields.
+Source inventory v2 includes the checked-in workflow declaration. Existing work
+schema versions stay 1; historical pins without `launch_inputs` remain readable
+for ownership/reconciliation but cannot render, submit or execute under this source.
+New work must be replanned after any uncertain old intent is resolved; existing
+bundle bytes/registry history are never rewritten. This source change cannot
+migrate unfinished training or incompatible same-protocol evaluator slots.
 
 ## Durable workflow authority
 
@@ -217,7 +233,13 @@ snapshot. See [squeue](https://slurm.schedmd.com/squeue.html) and
 `batch_source` is the production Bash template. It uses an existing explicit
 activation script/modules and absolute Python executable, a fixed checkout and
 PYTHONPATH, bounded thread variables and original Slurm-assigned GPU visibility.
-It never clones/pulls, installs, downloads or prepares data. Existing Python
+Before activation, it verifies pinned launch bytes and configured interpreter
+target using GNU sha256sum/readlink/dirname, rejecting changed or linked activation
+inputs explicitly. These utilities are future node prerequisites. Interpreter
+symlinks (for venvs) are target-pinned; runtime also revalidates pins before claim.
+Module definitions/transitive activation files and environment must be frozen by
+the operator; module names alone cannot verify them. It never clones/pulls,
+installs, downloads or prepares data. Existing Python
 3.10-3.12, torch 2.5.1, torchvision 0.20.1 and NumPy 1.26.4 requirements remain.
 Choose the compatible CUDA build/driver and environment during later approved
 setup; this step supplies no new wheel/version/precision default.

@@ -213,4 +213,8 @@ evaluation, benchmarks, synthetic/smoke experiments, or preliminary notebooks.
 Do not install packages, download data, or submit jobs. Existing inactive test
 files need not be maintained. Runtime verification is deferred until the full
 implementation is complete on OSU HPC. Source inspection does not establish
-runtime correctness.
+runtime correctness. All nine steps are now complete in source; the
+[operating guide](operating-guide.md) records the unresolved-input and verification
+handoff. Later setup, verification and execution require a separate explicit
+instruction. Step 9 changes operational integration/provenance only, preserving
+schema-4 scientific hashes, training semantics and independent evaluation seeds.

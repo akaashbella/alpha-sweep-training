@@ -232,8 +232,8 @@ never proves scientific completion.
 
 `execution_provenance.collect_provenance` runs only on the future execution path.
 It requires an actually imported checkout, hashes sorted relative file/digest
-records with inventory contract `checkout-python-and-declarations-v1`, includes
-all package `.py` files (excluding caches), pyproject, research declaration, named
+records with inventory contract `checkout-python-and-declarations-v2`, includes
+all package `.py` files (excluding caches), pyproject, research/workflow declarations, named
 dataset/model declarations and authoritative scientific specification. It excludes
 datasets, checkpoints/logs/results, generated manifests, environments and personal
 files. Inventory is checked twice for change during collection. Execute from a
@@ -283,8 +283,11 @@ Phase 1 is eligible first; phase 2's conservative eligibility requires every
 phase-1 training task durably training-completed. Pending robustness does not block training phase eligibility. Terminal failure is visible and does not
 imply phase success or silently unlock phase 2. Later orchestration must define
 any explicitly approved alternate terminal-failure policy. The one-task executor
-does not enforce cluster phase scheduling; Step 7 consumes eligibility, refreshes
-observations before dispatch and enforces CIFAR-10-first/global concurrency.
+enforces the all-120 CIFAR-10 training completion gate before CIFAR-100 computation
+and repeats it under its lease. Publication-only recovery, full-budget finalization
+and completed skip add no training and do not require that computation gate.
+Step 7 enforces shared cluster concurrency separately; direct task commands are
+manual allocated-node operations, not an alternate submission path.
 Candidate lists exclude execution failures, numerical failures and unsafe reads.
 
 Step 7 owns allocations/submission, resources/account checks, dependencies,

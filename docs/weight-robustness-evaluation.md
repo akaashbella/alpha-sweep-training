@@ -263,7 +263,7 @@ Existing typed execution-only overrides apply; science cannot change through
 execution. StopRequest discard stops between batches/before publication; finish
 completes the current realization and its commit, then stops at the next boundary.
 No signals/handler I/O, retries, jobs, arrays or scheduler dependencies are added.
-The later Step 7 source now provides that operational layer separately, documented
+Step 7 source provides that operational layer separately, documented
 in [slurm-workflow.md](slurm-workflow.md). Its runner passes StopRequest and an
 immutable `expected_binding` to execute_evaluation; binding equality is repeated
 before computation. One allocation processes one checkpoint's unfinished slots
@@ -299,7 +299,7 @@ selection, heatmaps or plotting are implemented here.
 
 Still pending: training seed plan, preparation seed/splits, normalization choices,
 drop_last, precision/backend policy and scheduler endpoints/cadence. Account and
-actual resources remain Step 7 inputs. Step 8 reporting now preserves every raw
+actual resources remain operational inputs. Step 8 reporting preserves every raw
 realization and requested/unbound slot, supports valid successes with deferred
 sweep publication, averages three realizations within each checkpoint before
 cross-seed sample SD and retains legacy clean evidence separately. See

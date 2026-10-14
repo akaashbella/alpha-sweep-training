@@ -77,9 +77,9 @@ applies these layers in increasing precedence:
 5. Typed CLI override mapping, keyed by full dotted field paths such as
    `scientific.alpha` and `execution.storage.output_root`.
 
-This is a small loader API, not a CLI or general-purpose configuration framework.
-A future CLI must parse arguments into actual numeric/bool values before passing
-overrides; strings must not bypass type checking. Layers cannot replace mappings
+This is a small loader API, not a general-purpose configuration framework.
+Implemented controller/preparation/reporting CLIs parse typed arguments before
+passing overrides; strings must not bypass type checking. Layers cannot replace mappings
 with scalars. Unknown keys and invalid types are rejected in every layer. Explicit values retain
 precedence even when selectors change: switching a fully resolved CIFAR-10
 config to CIFAR-100 requires changing its explicit classifier. Supply the correct
@@ -289,7 +289,7 @@ Step 5 implements restricted checkpoint files, full restoration and durable
 completion/failure publication with one metadata HEAD commit point. Its storage
 versions leave scientific schema/fingerprint 4 unchanged. See
 [checkpoints-and-recovery.md](checkpoints-and-recovery.md). Training launchers,
-manifest expansion are now connected by Step 6; Slurm remains Step 7. The
+manifest expansion are connected by Step 6; Slurm is implemented separately in Step 7. The
 [manifest/controller guide](manifests-and-controller.md) specifies finalized-base
 layering, strict full/phase documents, selectors, exact execution override fields,
 provenance inventory, typed outcomes and read-only coverage. Generating a manifest
@@ -326,3 +326,13 @@ preserved stored YAML, while the supplied run config's operational paths select
 the new location. Content identities stay unchanged. No schema keys are needed
 for normalization-policy or split-seed defaults: these are explicit preparation
 inputs, and persisted identities determine effective research data settings.
+
+For the two-dataset workflow, `OperationalPolicy.paths.split_file` remains null and
+is omitted from global execution overrides, inheriting each finalized task split.
+This null is intentional, unlike pending scientific values. Non-null legacy global
+split policies remain readable declarations but are not execution-ready. Build the
+manifest from separate research copies with correct per-dataset data/split paths;
+never edit the checksummed original prepared YAML. Source inventory v2 and external
+launch pins change operational provenance only, not schema-4 fingerprints.
+The [end-to-end guide](operating-guide.md) contains the full input/verification
+register and compatibility handoff. All later execution requires separate authorization.

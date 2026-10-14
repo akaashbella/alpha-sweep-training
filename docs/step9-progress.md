@@ -1,0 +1,129 @@
+# Step 9 final source integration
+
+Reviewed baseline and actual local HEAD: `main`,
+`68c0dbfba0f7596db00355a7332507e8a5e1e38c` (the supplied last reviewed commit).
+The initial working tree was clean; no later user edits were present, reset or
+discarded. Existing implementations were reused. Source/configuration/documentation
+and Git were inspected only; no path in the evidence table was executed.
+
+## Concrete corrections
+
+1. The global workflow `split_file` override incorrectly selected one file for
+   both datasets. Policy retains its version-1 historical declaration shape but
+   execution inherits the dataset-specific finalized manifest split: null is
+   intentional and excluded from pending paths/global overrides. A non-null legacy
+   global split produces an actionable execution-readiness error. Historical policy
+   state remains parseable; any policy adoption is explicit after quiescence.
+2. Direct `execute_task` could compute CIFAR-100 before the managed all-120
+   CIFAR-10 training completion gate. New/continue/overwrite computation now checks
+   the same historical training coverage before construction and again under its
+   run lease. Robustness is absent from the gate. Recovery/completed skip and
+   count-200 publication-only finalization add no epochs and remain independent.
+3. Planner/runner applied the phase gate to count-200 publication-only work.
+   Already verified full-budget authority is now exempt in both, matching direct
+   dispatch without permitting any additional training.
+4. Batch seals pinned activation/interpreter **paths**, but not their external
+   bytes/target. Plans now seal version-1 `launch_inputs`; render, write, submit and
+   runner repeat actual-file compatibility. Bash checks interpreter target and
+   launch bytes before activation. Activation inputs/ancestors must be plain;
+   interpreter symlinks are explicitly resolved and target-pinned. Actual allocation
+   provenance retains the launch pin. Source inventory v2 includes the checked-in
+   workflow declaration as well as all prior executable/declaration inputs.
+5. Stale source/doc status and the plan's acknowledgement-only durable-progress
+   wording were corrected. HEAD remains authoritative after a lost acknowledgement.
+   Historical progress notes are labeled historical, retaining their original
+   stopping points and Git inventories without retroactive execution claims.
+
+The scientific specification was updated only in its implementation/handoff prose.
+Scientific schema/fingerprint 4, spec constants and identity encoder, recipes,
+training/data/model/noise semantics, durable authority, checkpoint bindings and
+evaluation seeds are unchanged. The executable source digest deliberately changes:
+unfinished old work still fails conservative source/software compatibility. No
+global migration or relaxed compatibility gate was introduced.
+
+Work plan/bundle/registry schema versions remain 1, with additive nested launch
+provenance. Historical work lacking the launch pin remains readable by existing
+ownership/reconciliation validators but is explicitly rejected for new rendering,
+submission and execution. Preserve uncertain intents and old sealed bytes; resolve
+ownership/scheduler state before replanning. Restrictions stay report version 2;
+older/missing-coverage reports cannot authorize submission. No existing artifacts
+were generated, resealed, migrated, repaired, removed or modified.
+
+## Static evidence matrix
+
+| Contract / source path traced | Evidence and producer/consumer boundary reviewed |
+| --- | --- |
+| Strict declarations/readiness | [config.py](../src/alpha_sweep_training/config.py): RunConfig validation/unresolved_settings/require_research_ready, load_config/from_declaration; [spec.py](../src/alpha_sweep_training/spec.py) constants and fixed recipes, unchanged. Pending inputs remain explicit. |
+| Preparation and full manifest | [prepare.py](../src/alpha_sweep_training/prepare.py): parser/prepare_dataset; [prepared.py](../src/alpha_sweep_training/prepared.py): read_prepared_bundle/load_prepared_dataset/config association; [manifests.py](../src/alpha_sweep_training/manifests.py): build_manifest/manifest_from_dict/load_phase/task_config. Prepared bases precede architecture/task settings; exact 240 Cartesian tasks/linked phases and immutable data identity checks. |
+| Data streams | [data.py](../src/alpha_sweep_training/data.py): EpochSampler/TrainSampleKey/training and evaluation views, build_loaders/build_test_loader; local epoch/sample keys exclude architecture/alpha and workers never prepare/repair. Fixed official counts/transforms remain unchanged. |
+| Scratch model/weight/optimizer ownership | [models.py](../src/alpha_sweep_training/models.py): build_model/_adapt/_cpu_initialization; [weights.py](../src/alpha_sweep_training/weights.py): owned all-Conv/Linear discovery; [optimizers.py](../src/alpha_sweep_training/optimizers.py): fixed single-group native recipes on clean final-device parameters. All four CIFAR adaptations/native regularization retained. |
+| Fresh one-task execution | [task_execution.py](../src/alpha_sweep_training/task_execution.py): execute_task/dispatch before construction and inside open_run; [artifacts.py](../src/alpha_sweep_training/artifacts.py): new/overwrite/active ownership; [training.py](../src/alpha_sweep_training/training.py): commit_initial before batches. No fresh fallback for existing state. |
+| Per-batch perturbation and precision | [perturbation.py](../src/alpha_sweep_training/perturbation.py): training_forward/gaussian_weight_offset; [runtime.py](../src/alpha_sweep_training/runtime.py) explicit CUDA/autocast/backend; [randomness.py](../src/alpha_sweep_training/randomness.py) separate fresh/restored RuntimeStreams. Functional tensors retain gradients to float32 clean parameters; correction=0 detached scales/noise, original BN buffers, zero bypass. |
+| Update/epoch counters and strict best | [training.py](../src/alpha_sweep_training/training.py): _backward_and_update, epoch loop, clean validation, snapshot; [checkpoint_records.py](../src/alpha_sweep_training/checkpoint_records.py): validate_epoch. Observed native optimizer calls distinguish AMP skips; successful-update cadence, full coverage, statistics and strict correct-count improvement agree. |
+| Original scheduler/restoration | [scheduler.py](../src/alpha_sweep_training/scheduler.py): completed-unit equation/state validation/saved_schedule_rates; [continuation.py](../src/alpha_sweep_training/continuation.py): full preflight/restore. initialize=False, optimizer then scheduler/scaler/data, RNG last; original horizon and separate counts. |
+| Durable commits and lost acknowledgements | [persistence.py](../src/alpha_sweep_training/persistence.py): _commit/commit_epoch/publish_failure; [checkpoint_journal.py](../src/alpha_sweep_training/checkpoint_journal.py): read_committed/receipt and record/role validation; [checkpoints.py](../src/alpha_sweep_training/checkpoints.py) restricted CPU payloads. Immutable files precede HEAD; committed completion dominates receipt/diagnostic loss. |
+| Interruption/continuation/numerical failure | [task_execution.py](../src/alpha_sweep_training/task_execution.py), [continuation.py](../src/alpha_sweep_training/continuation.py), [interruption.py](../src/alpha_sweep_training/interruption.py), [recovery.py](../src/alpha_sweep_training/recovery.py): original latest restoration/replay; orphan/committed numerical evidence terminal, execution retry explicit, publication repair separate. |
+| Count-200/legacy boundary | TrainingFinalizationPlan, execute_task early finalization, DurableTrainingPersistence.publish_training_completion, journal v1/v2 readers: stored provenance and full budget before/under ownership; no builders/extra epochs/test sweep; legacy clean evidence does not fabricate robustness. |
+| Independent best binding | [evaluation_inputs.py](../src/alpha_sweep_training/evaluation_inputs.py): bind_evaluation_checkpoint; [evaluation_protocol.py](../src/alpha_sweep_training/evaluation_protocol.py): prescribed_slots/perturbation_seed. Actual immutable best generation/digest/data/protocol; approved private keys, 28 slots/checkpoint, no training restore. |
+| Fixed full-pass network/preservation | [evaluation.py](../src/alpha_sweep_training/evaluation.py): evaluate_realization/_evaluate_split; [evaluation_state.py](../src/alpha_sweep_training/evaluation_state.py): CleanStateBaseline.realization/verify/restore. Once-per-pass functional weights; full 10,000-image counts, clean zero path; exact parameter/buffer/binding/mode preservation on exceptions. |
+| Slot skip/failure/deferred sweep | [evaluation_execution.py](../src/alpha_sweep_training/evaluation_execution.py): execute_evaluation; [evaluation_persistence.py](../src/alpha_sweep_training/evaluation_persistence.py): leases/publish_robustness_completion/SweepFinalizationDeferred; [evaluation_coverage.py](../src/alpha_sweep_training/evaluation_coverage.py): historical compatible observations/verified sweep. Null partial metrics, immutable ancestry, success after lost ack, contention exit 0 and pending/deferred/error distinctions; only all-28 authority claims completion. |
+| Phase gating and work selection | [work_plans.py](../src/alpha_sweep_training/work_plans.py): build_work_plan/candidate/validate_item; [coverage.py](../src/alpha_sweep_training/coverage.py): collect_coverage/inspect_task. Phase computation requires 120 successful training completions; terminal failure never unlocks phase 2; pending evaluation independent. |
+| Packaging/provenance/launch | [pyproject.toml](../pyproject.toml), [__init__.py](../src/alpha_sweep_training/__init__.py), [execution_provenance.py](../src/alpha_sweep_training/execution_provenance.py): actual imported checkout, source inventory v2, actual software and launch pins; five CLI mains/parser arguments matched to documented commands. Paths/allocation/PIDs/timestamps stay outside scientific identity. |
+| Render/explicit submission | [work_render.py](../src/alpha_sweep_training/work_render.py): batch_source/render_work/write_bundle; [hpc_workflow.py](../src/alpha_sweep_training/hpc_workflow.py): submit_bundle; [slurm_client.py](../src/alpha_sweep_training/slurm_client.py): guarded submit/validate_restriction_report. Seal/index/policy/checkpoint/launch linkage, report v2 coverage, refreshed eligibility and intent before sbatch, one shared cap. |
+| Signal/owning allocation | [allocation_runner.py](../src/alpha_sweep_training/allocation_runner.py): run_allocation/_run_owned_allocation/allocated_identity; [allocation_signals.py](../src/alpha_sweep_training/allocation_signals.py): scoped attribute-only StopRequest handlers and worker hook. Bash exec preserves owning PID/GPU visibility; one claim and one sequential task/checkpoint per allocation. |
+| Concurrent controllers/uncertain scheduler | [workflow_registry.py](../src/alpha_sweep_training/workflow_registry.py): open_workflow/controller_lock/reserve/claim_allocation/reconcile; SlurmClient.observe_wave and hpc_workflow resolve-submission/terminal/locks. One unresolved bounded wave, exact intent/IDs, unknown accounting/residual locks retain capacity; verified safe-stop continuation only. |
+| Historical complete/incomplete collection | [results.py](../src/alpha_sweep_training/results.py): collect_results/_collect_evaluation; [reporting_contract.py](../src/alpha_sweep_training/reporting_contract.py): validate_collection/reporting_provenance. All 240/6720 expected rows; null unbound refs/seeds, stable brackets, explicit conditions, saved provenance and evaluation inspection isolated from validation eligibility. |
+| Summaries/selection/pairing | [aggregation.py](../src/alpha_sweep_training/aggregation.py): summarize_results/validation_selection/_signature/_paired. Complete sets only, sample ddof=1, realization→checkpoint→seed means, integer validation denominators/exact co-winners, descriptive percentage-point pairs. |
+| Figures and derived authority | [plotting.py](../src/alpha_sweep_training/plotting.py): plot_results; [report_publication.py](../src/alpha_sweep_training/report_publication.py): open_report/publish/load/inspect. Lazy Figure/CanvasAgg, individual observations/masked unavailable cells, separate guarded output outside base/managed/source, final checksums and explicit partial failure; derived completion never establishes science. |
+| Read-only boundaries | Controller inspect/select/status/evaluation-inspect/status, workflow status without --scheduler, historical collectors/validators: no research computation/repair, signal registration, Slurm calls or research writer leases. Planning records actual versions/launch bytes but submits nothing; rendering writes operational state and is separately classified. |
+
+These traces include fresh/initialized continuation, clean interruption, count-200,
+completed compatible skip, exceptional preservation, lost acknowledgement, deferred
+finalization/genuine errors, explicit numerical/execution failure, uncertain submission,
+concurrent controllers and wholly unavailable/partial/complete reporting. They are
+static evidence, not proof of runtime behavior.
+
+## Packaging and remaining gates
+
+Python `>=3.10,<3.13`, torch `2.5.1`, torchvision `0.20.1`, NumPy `1.26.4`, PyYAML
+`>=6.0` and optional reporting Matplotlib `>=3.8,<3.11` declarations are unchanged.
+Console scripts and their actual mains are present; imports requiring research
+compute remain in their component paths. No older standalone scripts/templates,
+inactive tests or alternate submission entry points were found in the inspected
+layout. Direct manual run/evaluate commands are explicitly distinguished from the
+registered worker/supported production submission path in the operating guide.
+
+No unresolved repairable source blocker was identified in this review. Actual
+installation/import/rendering, GPU/software compatibility, accounting version/output,
+ownership races/signals, durable shared filesystem behavior, large-reader/renderer
+memory/runtime and numerical behavior remain unverified. Module definitions and
+activation transitive files require operator freezing beyond top-level launch pins.
+
+Pending inputs remain training seeds; preparation seeds/persisted splits;
+normalization policy/constants/source; drop_last; precision/backend; scheduler
+cadence/warmup factor/minimum LR; actual account/QOS/restriction review/shared paths/
+fixed environment/CUDA; fsync/atomic rename/hard-link guarantees; accounting visibility
+and full production reader/runtime/renderer evidence. The exact fields, blocked
+operations and separate future verification handoff are in
+[operating-guide.md](operating-guide.md).
+
+## Final source-only handoff
+
+All nine implementation steps are complete in source, including the approved
+independent evaluation integration. The end-to-end guide orders twelve future
+operations and supplies recovery decision tables without executing them.
+README, AGENTS, implementation plan and affected guides reflect the current scope;
+historical notes remain historical.
+
+Final Step 9 working-tree inventory: 23 modified tracked files and two new
+untracked documentation files (`operating-guide.md`, this note), nothing staged;
+branch/HEAD remain the reviewed `main` commit above. Nothing committed or pushed.
+Changes comprise eight source files, the operational workflow declaration, and
+documentation/status integration. No research scientific defaults were populated.
+
+No tests, project execution/imports, executable verification, compilation/linting,
+installations, environment setup, downloads/preparation, models/training/evaluation,
+actual manifests/submission bundles/workflow state, aggregates/reports/figures,
+synthetic examples/experiment artifacts, Slurm commands or HPC jobs were performed.
+Runtime correctness remains unverified. Stop here; the future operating sequence
+requires a separate explicit instruction and has not begun.

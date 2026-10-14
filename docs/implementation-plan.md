@@ -1,6 +1,6 @@
-# Shared contracts and remaining implementation steps
+# Shared contracts and completed source implementation
 
-Steps 1–8 implement configuration, identity, finite atomic serialization,
+Steps 1–9 implement configuration, identity, finite atomic serialization,
 provenance validation, guarded run initialization, full official CIFAR preparation,
 reproducible loaders, all four scratch CIFAR models, owned eligible-weight
 inventory, fixed optimizers, the original-budget scheduler, shared training,
@@ -12,7 +12,9 @@ executed or runtime-verified. Step 7 now adds source-only operational policy,
 bounded Slurm waves, shared workflow authority, signal delivery and allocation
 continuation. Step 8 implements authoritative result snapshots, complete summaries,
 validation co-winners, paired comparisons, guarded reporting and headless figures.
-Final integration remains Step 9. Commands are for later HPC use. See
+Step 9 completes static integration and the [end-to-end operating guide](operating-guide.md).
+Environment setup, capability verification and execution require separate explicit
+authorization; completion of source does not initiate them. Commands are for later HPC use. See
 [models-and-optimization.md](models-and-optimization.md) and
 [training-and-perturbation.md](training-and-perturbation.md) and
 [checkpoints-and-recovery.md](checkpoints-and-recovery.md) for implemented contracts.
@@ -37,7 +39,7 @@ global clean-only testing while retaining clean validation and the mandatory bas
 | Training | train_run(config, data, model, optimizer, scheduler, run, *, runtime, streams, persistence, continuation=None, stop=None) → durably acknowledged TrainingResult or TrainingRunError | 4–5 implemented |
 | Records | Typed epochs/test/failures/statistics, finite JSON envelopes, epoch/layer CSV renderers and guarded diagnostic JSONL append | 4 implemented |
 | Checkpoint/continuation | DurableTrainingPersistence(run): commit_initial, commit_epoch, publish_training_completion, publish_failure; ContinuationPlan preflight/restore and CPU TrainingFinalizationPlan → ContinuationState | 5 implemented |
-| Recovery/interruption | inspect_training_completion (legacy inspect_completion adapter), recovery_diagnostics, explicit recover publication/numerical evidence and confirmed lock recovery; StopRequest finish/discard | 5 implemented; signal registration/orchestration later |
+| Recovery/interruption | inspect_training_completion (legacy inspect_completion adapter), recovery_diagnostics, explicit recover publication/numerical evidence and confirmed lock recovery; StopRequest finish/discard | 5 implemented; scoped signals/orchestration implemented in 7 |
 | Manifest/task selection | build_manifest(dataset_configs, model_declarations, seeds, base_dir) → strict 240-task Manifest; load_manifest/load_phase/select_task/task_config → validated Task/config with execution-only overrides | 6 implemented |
 | One-task execution | execute_task(manifest, task, base_dir, source_root, operation, overrides, stop) → TaskOutcome/ExitCode through existing engine, lease and continuation plan | 6 implemented |
 | Coverage/provenance | inspect_task/collect_coverage → complete identity join and phase eligibility; collect_provenance → actual future execution source/software/allocation record | 6 implemented |
@@ -104,7 +106,7 @@ to continuation when the finalized precision policy uses them.
 Step 4's `EpochBoundary` contains the complete epoch record, clean statistics,
 owned clean/model/optimizer/scheduler/scaler/RNG/data snapshot and previous commit
 ID. `commit_epoch` must durably publish coordinated state/records before returning
-a validated `CommitReceipt`. Only acknowledgement advances durable progress;
+a validated `CommitReceipt`. Validated HEAD establishes durable progress even without acknowledgement;
 observed completed epochs in a failure may be greater. CSVs derive from committed
 records and `train.log` is diagnostic only. Unknown transaction outcomes must be
 reconciled by Step 5 before replay. See the training guide for exact typed signatures,
@@ -230,7 +232,7 @@ complete three-seed set. Sample SD is ddof=1 and exact unrounded validation-mean
 ties are all reported in grid order. Incomplete grids have no official winner. Report
 test results for every alpha/seed, not only the selected alpha.
 
-## Steps 2–8 completed in source; remaining step in order
+## All nine steps completed in source; execution deferred
 
 2. **Dataset preparation and reproducibility (implemented, execution deferred).** Official dataset integrity,
    persistent fixed splits, finalized normalization, seeding/augmentation
@@ -273,12 +275,16 @@ remains deferred.
    all-ten validation-only co-winners, paired differences, read-only snapshots,
    derived namespace ownership and PNG/PDF/SVG families are documented in
    [results-and-figures.md](results-and-figures.md). No aggregates/figures generated.
-9. **Final source integration and operating documentation.** Source-only
-   consistency review, dependency/CLI/manifest integration, and complete HPC
-   operating instructions. Runtime validation occurs after all nine steps.
+9. **Final source integration and operating documentation (implemented, execution deferred).**
+   Static dependency/CLI/manifest and lifecycle review; corrected per-dataset split
+   inheritance, manual training phase gating and pinned external launch inputs.
+   [operating-guide.md](operating-guide.md) orders future operation, recovery and
+   unresolved-input/verification handoff; [step9-progress.md](step9-progress.md)
+   records source evidence. Scientific schema/fingerprints and seed contracts are unchanged.
 
 Each implementation step ends with source and Git-diff inspection, not executable
 verification. Do not create tests, smoke configs, demonstrations, preliminary
-experiments, or placeholder modules. Step 8 stops before Step 9 final integration.
-Actual HPC setup, accounting/driver/filesystem validation and runtime
-verification remain authorized work after the complete implementation.
+experiments, or placeholder modules. Step 9 stops at source review and handoff.
+Actual HPC setup, accounting/driver/filesystem validation, runtime verification
+and research execution need a separate explicit instruction. Source completion
+is not launch readiness, runtime correctness, measured performance or experiment completion.

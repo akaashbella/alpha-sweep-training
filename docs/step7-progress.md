@@ -1,5 +1,11 @@
 # Step 7 source progress
 
+Historical Step 7 record, including its later restriction-evidence correction.
+The stopping points and Git inventories below describe those turns, not the
+current repository. All nine steps are now complete in source; see
+[step9-progress.md](step9-progress.md) and [operating-guide.md](operating-guide.md).
+No earlier execution is claimed retroactively.
+
 Baseline: clean working tree at reviewed remote/local HEAD
 `a1276ac93959f34d44fae0e86f82c8e2ec804fec`; no user edits were present.
 
