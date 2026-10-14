@@ -5,7 +5,7 @@ from enum import IntEnum
 
 from .artifacts import RunDirectoryError, effective_storage_config, open_run
 from .config import ConfigError
-from .coverage import TaskObservation, inspect_task
+from .coverage import TaskObservation, inspect_task, collect_coverage
 from .manifests import Manifest, Task, ManifestError, _same, manifest_from_dict, select_task, task_config
 
 
@@ -148,6 +148,16 @@ def execute_task(manifest: Manifest, task: Task, *, base_dir, source_root, overr
         if numerical_reference is not None and numerical_reference not in observation.numerical_evidence:
             raise ManifestError("Numerical reference is not current validated failure evidence")
 
+        def require_training_phase():
+            if (selected_operation in ("new", "continue", "overwrite") and selected.phase == 2
+                    and not collect_coverage(manifest, base_dir=base_dir, overrides=overrides)
+                        ["phases"][0]["training_successfully_completed"]):
+                raise ManifestError("All 120 CIFAR-10 training completions must validate before CIFAR-100 training; independent robustness is not part of this gate")
+
+        # The manual one-task entry point has the same computation gate as the
+        # managed runner. Publication-only recovery/finalization remain possible.
+        require_training_phase()
+
         stage = "construction"
         from .data import build_loaders
         from .runtime import build_runtime
@@ -188,6 +198,7 @@ def execute_task(manifest: Manifest, task: Task, *, base_dir, source_root, overr
                     completed_epochs=observation.completed_epochs,
                     diagnostic="Publication repaired; stored scientific status is unchanged unless numerical evidence was explicitly reconciled")
             stage = "restoration"
+            require_training_phase()
             continuation = None if plan is None else plan.restore(run)
             stage = "training"
             try:

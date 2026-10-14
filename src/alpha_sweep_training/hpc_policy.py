@@ -155,7 +155,12 @@ class OperationalPolicy:
         if os.name != "posix":
             raise WorkflowError("Operational execution requires the shared Linux HPC environment; declarations remain valid on other platforms")
         doc = self.to_dict()
-        pending = [f"paths.{k}" for k, v in doc["paths"].items() if v is None]
+        # Each dataset's finalized manifest supplies its own split. Retain the
+        # legacy key for reading sealed policies, but never execute a global
+        # split override against the two-dataset grid.
+        if doc["paths"]["split_file"] is not None:
+            raise WorkflowError("Leave paths.split_file null: the full workflow inherits each dataset's finalized manifest split; a global split override is unsafe. Replan, or explicitly adopt the corrected policy after quiescence.")
+        pending = [f"paths.{k}" for k, v in doc["paths"].items() if v is None and k != "split_file"]
         if doc["resources"]["account"] is None:
             pending.append("resources.account (actual Slurm research/class account, never an ONID fallback)")
         if doc["environment"]["python_executable"] is None:
@@ -170,7 +175,7 @@ class OperationalPolicy:
         doc = self.to_dict()
         resources, paths = doc["resources"], doc["paths"]
         return {"execution.device": "cuda:0", "execution.num_workers": resources["num_workers"],
-            **{f"execution.storage.{k}": paths[k] for k in ("output_root", "checkpoint_root", "result_root", "log_root", "data_root", "split_file")},
+            **{f"execution.storage.{k}": paths[k] for k in ("output_root", "checkpoint_root", "result_root", "log_root", "data_root")},
             **{f"execution.slurm.{k}": resources[k] for k in ("partition", "account", "gpus", "cpus", "memory_gb", "wall_time", "max_concurrent")}}
 
 

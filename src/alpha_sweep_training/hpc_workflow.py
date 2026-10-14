@@ -36,6 +36,8 @@ def submit_bundle(workflow, bundle, *, execute=False):
     workflow.guard()
     policy, manifest = workflow.policy, workflow.manifest
     validate_bundle(bundle, manifest, policy)
+    from .execution_provenance import require_launch_inputs
+    require_launch_inputs(bundle["execution_provenance"], policy)
     verify_effective_evidence(policy)
     client = SlurmClient(policy)
     workflow.reconcile(client)
@@ -52,12 +54,13 @@ def submit_bundle(workflow, bundle, *, execute=False):
         same(item, current_items[item["unit_key"]], "fresh reserved work/continuation/checkpoint binding")
     same(current["execution_provenance"]["code"]["source_sha256"], bundle["execution_provenance"]["code"]["source_sha256"], "fixed planned submission source")
     same(current["execution_provenance"]["software"], bundle["execution_provenance"]["software"], "fixed planned submission software")
+    same(current["execution_provenance"]["launch_inputs"], bundle["execution_provenance"]["launch_inputs"], "fixed planned submission launch inputs")
     relative = f"bundles/{bundle['wave_id']}/mapping.json"
     target = relative_file(workflow.root, relative)
     same(read_json(target), bundle, "registered bundle content")
     script = relative_file(workflow.root, f"bundles/{bundle['wave_id']}/batch.sh")
     same(digest_file(script), bundle["script_sha256"], "submission script content")
-    same(script.read_text(encoding="utf-8"), batch_source(policy, target), "submission launch/policy")
+    same(script.read_text(encoding="utf-8"), batch_source(policy, target, execution_pin=bundle["execution_provenance"]), "submission launch/policy")
     # Slurm opens logs before running the shell: prepare persistent directories now.
     logs = Path(policy.to_dict()["paths"]["slurm_log_root"])
     if any(_is_link(p) for p in (logs, *logs.parents)):

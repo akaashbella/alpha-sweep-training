@@ -53,7 +53,7 @@ def build_work_plan(manifest, policy, *, manifest_path, state=None, retry_run_id
     from .coverage import collect_coverage, inspect_task
     from .evaluation_coverage import collect_evaluation_coverage
     from .evaluation_inputs import bind_evaluation_checkpoint
-    from .execution_provenance import collect_provenance
+    from .execution_provenance import collect_provenance, collect_launch_inputs
     from .evaluation_protocol import prescribed_slots
     manifest = manifest_from_dict(manifest.to_dict())
     policy.require_ready()
@@ -73,7 +73,8 @@ def build_work_plan(manifest, policy, *, manifest_path, state=None, retry_run_id
     # Full actual provenance is still recorded by the owning execution engine.
     execution_pin = {"code": {key: deepcopy(provenance["code"][key]) for key in
                              ("source_sha256", "inventory_version", "inventory")},
-                     "software": deepcopy(provenance["software"])}
+                     "software": deepcopy(provenance["software"]),
+                     "launch_inputs": collect_launch_inputs(policy)}
     coverage = collect_coverage(manifest, base_dir=base, overrides=overrides)
     phase2 = coverage["phases"][0]["training_successfully_completed"]
     active = [wave["wave_id"] for wave in state["waves"] if wave["status"] not in ("terminal", "confirmed_not_submitted")]
@@ -121,7 +122,7 @@ def build_work_plan(manifest, policy, *, manifest_path, state=None, retry_run_id
         obs = inspect_task(task, base_dir=base, overrides=overrides, provenance=provenance)
         if obs.condition == "ok" and obs.training_complete:
             observations.append({"training_run_id": task.run_id, "lifecycle": "training", "classification": "training_completed"})
-        elif task.phase == 2 and not phase2:
+        elif task.phase == 2 and not phase2 and not obs.full_budget_committed:
             observations.append({"training_run_id": task.run_id, "lifecycle": "training", "classification": "phase1_training_incomplete"})
         elif obs.condition not in ("ok", "missing") or obs.terminal_numerical:
             observations.append({"training_run_id": task.run_id, "lifecycle": "training", "classification": "unsafe_or_terminal", "inspection": obs.to_dict()})

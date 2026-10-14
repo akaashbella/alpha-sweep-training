@@ -138,7 +138,8 @@ def _run_owned_allocation(mapping_path, stop):
     same(str(Path(mapping_path).absolute()), str(expected_path), "registered mapping path")
     script_path = expected_path.with_name("batch.sh")
     same(digest_file(script_path), bundle["script_sha256"], "allocation batch source digest")
-    same(script_path.read_text(encoding="utf-8"), batch_source(policy, expected_path), "allocation script/policy")
+    same(script_path.read_text(encoding="utf-8"), batch_source(policy, expected_path,
+        execution_pin=bundle["execution_provenance"]), "allocation script/policy")
     scheduler = allocated_identity(policy)
     index = scheduler["array_index"]
     if not 0 <= index < len(bundle["items"]):
@@ -149,6 +150,7 @@ def _run_owned_allocation(mapping_path, stop):
     provenance = {"environment": {key: value for key, value in os.environ.items() if key.startswith("SLURM_") or key == "CUDA_VISIBLE_DEVICES"},
                   "hostname": socket.gethostname(), "pid": os.getpid(), "executable": sys.executable,
                   "policy_fingerprint": policy.fingerprint, "scheduler": scheduler}
+    provenance["launch_inputs"] = deepcopy(bundle["execution_provenance"]["launch_inputs"])
     with allocation_signal_handlers(stop, warning_policy=signals["warning_policy"], termination_policy=signals["termination_policy"]):
         with claim_allocation(manifest, policy, bundle, index, scheduler, provenance, stop=stop) as (claim, wave):
             result, diagnostic, safe_stop = None, None, False
@@ -171,7 +173,7 @@ def _run_owned_allocation(mapping_path, stop):
                     obs = inspect_task(task, base_dir=paths["base_dir"], overrides=policy.execution_overrides(), provenance=actual)
                     if not obs.training_complete:
                         same(obs.transaction, item["training_transaction"], "planned training continuation boundary")
-                        if task.phase == 2 and not collect_coverage(manifest, base_dir=paths["base_dir"], overrides=policy.execution_overrides())["phases"][0]["training_successfully_completed"]:
+                        if task.phase == 2 and not obs.full_budget_committed and not collect_coverage(manifest, base_dir=paths["base_dir"], overrides=policy.execution_overrides())["phases"][0]["training_successfully_completed"]:
                             raise WorkflowError("All 120 CIFAR-10 training completions must validate before phase 2")
                     stop.check(at_boundary=True, phase="allocation_training_dispatch")
                     result = execute_task(manifest, task, base_dir=paths["base_dir"], source_root=paths["checkout"],

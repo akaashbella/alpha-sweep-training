@@ -13,7 +13,7 @@ from .provenance import software_provenance
 from .serialization import strict_json_text
 from .spec import ARCHITECTURES, DATASETS
 
-SOURCE_INVENTORY_VERSION = "checkout-python-and-declarations-v1"
+SOURCE_INVENTORY_VERSION = "checkout-python-and-declarations-v2"
 ALLOCATION_ENV = ("SLURM_JOB_ID", "SLURM_ARRAY_JOB_ID", "SLURM_ARRAY_TASK_ID", "SLURM_JOB_PARTITION",
     "SLURM_JOB_ACCOUNT", "SLURM_CPUS_PER_TASK", "SLURM_MEM_PER_NODE", "SLURM_JOB_NODELIST",
     "SLURM_RESTART_COUNT", "CUDA_VISIBLE_DEVICES", "CUBLAS_WORKSPACE_CONFIG")
@@ -31,7 +31,7 @@ def source_inventory(source_root) -> dict:
     if Path(__file__).resolve() != package / "execution_provenance.py":
         raise ValueError("source_root must be the checkout actually imported; use its editable install/PYTHONPATH")
     files = list(package.rglob("*.py"))
-    files += [root / "pyproject.toml", root / "configs" / "research.yaml",
+    files += [root / "pyproject.toml", root / "configs" / "research.yaml", root / "configs" / "workflow.yaml",
               root / "docs" / "scientific-specification.md"]
     files += [root / "configs" / "datasets" / f"{name}.yaml" for name in DATASETS]
     files += [root / "configs" / "models" / f"{name}.yaml" for name in ARCHITECTURES]
@@ -48,6 +48,48 @@ def source_inventory(source_root) -> dict:
     if not result or "src/alpha_sweep_training/training.py" not in result:
         raise ValueError("Incomplete execution source inventory")
     return result
+
+
+def collect_launch_inputs(policy) -> dict:
+    """Pin external launch bytes without executing activation/module commands.
+
+    A venv interpreter may be a symlink; pin both its configured path and its
+    resolved plain target. Activation scripts and their ancestors must be plain.
+    Module names remain declarations; site module/transitive environment freezing
+    and CUDA compatibility still require explicit operator verification.
+    """
+    from .artifacts import _is_link
+    from .hpc_policy import WorkflowError
+    policy.require_ready()
+    env = policy.to_dict()["environment"]
+
+    def plain(path):
+        if not path.is_file() or any(_is_link(p) for p in (path, *path.parents)):
+            raise WorkflowError(f"Missing or linked launch input: {path}")
+        return {"path": str(path), "sha256": file_digest(path)}
+
+    configured = Path(env["python_executable"])
+    try:
+        resolved = configured.resolve(strict=True)
+    except OSError as exc:
+        raise WorkflowError(f"Cannot resolve configured interpreter: {configured}") from exc
+    interpreter = plain(resolved)
+    interpreter["configured_path"] = str(configured)
+    activation = None if env["activation_script"] is None else plain(Path(env["activation_script"]))
+    return {"launch_inputs_version": 1, "python": interpreter,
+            "activation_script": activation, "modules": list(env["modules"])}
+
+
+def require_launch_inputs(execution_pin, policy) -> dict:
+    """New execution rejects historical unpinned plans; reading remains possible."""
+    from .hpc_policy import WorkflowError, exact, same
+    if type(execution_pin) is not dict or "launch_inputs" not in execution_pin:
+        raise WorkflowError("Historical work has no external launch-input pin; preserve it for reconciliation and create a new reviewed plan/bundle before execution")
+    pin = execution_pin["launch_inputs"]
+    exact(pin, {"launch_inputs_version", "python", "activation_script", "modules"}, "launch inputs")
+    same(pin["launch_inputs_version"], 1, "launch inputs version")
+    same(pin, collect_launch_inputs(policy), "fixed planned/current external launch inputs")
+    return pin
 
 
 def collect_provenance(source_root, *, attempt: dict) -> dict:

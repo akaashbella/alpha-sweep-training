@@ -18,15 +18,49 @@ def wave_identity(workflow_id, plan_digest, policy_fingerprint, items):
         "policy_fingerprint": policy_fingerprint, "items": [item["document_sha256"] for item in items]})[7:]
 
 
-def batch_source(policy, mapping_path):
+def batch_source(policy, mapping_path, *, execution_pin):
     """Batch shell becomes owning Python PID via exec; B:USR1 reaches that PID only."""
     policy.require_ready()
     doc = policy.to_dict()
     env, r = doc["environment"], doc["resources"]
+    from .execution_provenance import require_launch_inputs
+    launch = require_launch_inputs(execution_pin, policy)
     quote = shlex.quote
     lines = ["#!/bin/bash", "set -euo pipefail",
              ': "${CUDA_VISIBLE_DEVICES:?Slurm must assign one visible GPU}"',
              'alpha_sweep_assigned_visibility="$CUDA_VISIBLE_DEVICES"']
+    # Check before sourcing user code, with no project import or module probe.
+    # GNU sha256sum/readlink are explicit future submit/compute-node prerequisites.
+    lines.extend([
+        'alpha_sweep_check_bytes() {',
+        '  local checksum',
+        '  if ! checksum=$(sha256sum < "$1"); then',
+        '    echo "Cannot read pinned launch input: $1" >&2; exit 22',
+        '  fi',
+        '  if [[ "${checksum:0:64}" != "$2" ]]; then',
+        '    echo "Pinned launch input changed: $1; replan before execution" >&2; exit 22',
+        '  fi',
+        '}',
+    ])
+    interpreter = launch["python"]
+    lines.extend([
+        'if [[ "$(readlink -f -- ' + quote(interpreter["configured_path"]) + ')" != ' + quote(interpreter["path"]) + ' ]]; then',
+        '  echo "Configured interpreter target changed; replan before execution" >&2; exit 22',
+        'fi',
+        "alpha_sweep_check_bytes " + quote(interpreter["configured_path"]) + " " + quote(interpreter["sha256"]),
+    ])
+    if launch["activation_script"] is not None:
+        activation = launch["activation_script"]
+        lines.extend([
+            "alpha_sweep_launch_parent=" + quote(activation["path"]),
+            'while [[ "$alpha_sweep_launch_parent" != / ]]; do',
+            '  if [[ -L "$alpha_sweep_launch_parent" ]]; then',
+            '    echo "Linked activation path is rejected" >&2; exit 22',
+            '  fi',
+            '  alpha_sweep_launch_parent=$(dirname -- "$alpha_sweep_launch_parent")',
+            'done',
+            "alpha_sweep_check_bytes " + quote(activation["path"]) + " " + quote(activation["sha256"]),
+        ])
     if env["activation_script"] is not None:
         lines.append("source " + quote(env["activation_script"]))
     if env["modules"]:
@@ -73,7 +107,7 @@ def render_work(plan, manifest, policy, *, work_ids=None):
     wave_id = wave_identity(workflow_id, plan["document_sha256"], policy.fingerprint, selected)
     root = Path(policy.to_dict()["paths"]["workflow_root"])
     mapping = root / "bundles" / wave_id / "mapping.json"
-    script = batch_source(policy, mapping)
+    script = batch_source(policy, mapping, execution_pin=plan["execution_provenance"])
     bundle = seal({"bundle_version": 1, "kind": "allocation_wave", "wave_id": wave_id,
         "workflow_id": workflow_id, "plan_sha256": plan["document_sha256"], "manifest_path": plan["manifest_path"],
         "manifest_grid_id": manifest.grid_id, "manifest_document_sha256": manifest.document_sha256,
@@ -117,7 +151,8 @@ def write_bundle(workflow, bundle, script):
     workflow.guard()
     validate_bundle(bundle, workflow.manifest, workflow.policy)
     root, wave_id = workflow.root, bundle["wave_id"]
-    expected = batch_source(workflow.policy, root / "bundles" / wave_id / "mapping.json")
+    expected = batch_source(workflow.policy, root / "bundles" / wave_id / "mapping.json",
+                            execution_pin=bundle["execution_provenance"])
     same(script, expected, "rendered allocation script")
     same(hashlib.sha256(script.encode("utf-8")).hexdigest(), bundle["script_sha256"], "batch script seal")
     target = relative_file(root, f"bundles/{wave_id}/batch.sh", create_parents=True)
