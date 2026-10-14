@@ -5,11 +5,164 @@ import os
 import re
 import subprocess
 
-from .hpc_policy import WorkflowError, same
-from .work_plans import seal
+from .hpc_policy import WorkflowError, exact, same
+from .work_plans import check_seal, seal
 
 TERMINAL = {"COMPLETED", "FAILED", "CANCELLED", "TIMEOUT", "NODE_FAIL", "OUT_OF_MEMORY",
             "PREEMPTED", "BOOT_FAIL", "DEADLINE"}
+
+RESTRICTION_REPORT_VERSION = 2
+# Documented LIST/SHOW format names in Slurm 24.11. The deployed version is
+# collected separately; unsupported fields are errors, never silently dropped.
+ASSOCIATION_FIELDS = ("Cluster", "Account", "User", "Partition", "ID", "ParentID", "ParentName",
+    "QOS", "DefaultQOS", "Flags", "GrpTRES", "GrpTRESMins", "GrpTRESRunMins",
+    "MaxTRESPJ", "MaxTRESPN", "MaxTRESMinsPJ", "GrpWall", "MaxWall",
+    "GrpJobs", "GrpSubmitJobs", "MaxJobs", "MaxSubmitJobs", "GrpJobsAccrue", "MaxJobsAccrue")
+QOS_FIELDS = ("Name", "ID", "Flags", "LimitFactor", "UsageFactor", "UsageThreshold",
+    "GrpTRES", "GrpTRESMins", "GrpTRESRunMins", "MaxTRESPJ", "MaxTRESPN", "MaxTRESPU", "MaxTRESPA",
+    "MaxTRESMinsPJ", "MaxTRESRunMinsPU", "MaxTRESRunMinsPA", "MinTRES", "GrpWall", "MaxWall",
+    "GrpJobs", "GrpSubmitJobs", "MaxJobsPU", "MaxJobsPA", "MaxSubmitJobsPU", "MaxSubmitJobsPA",
+    "GrpJobsAccrue", "MaxJobsAccruePU", "MaxJobsAccruePA", "Preempt", "PreemptMode", "PreemptExemptTime")
+RESTRICTION_COLLECTION = {"contract": "association-qos-allocation-limits-v2", "documented_slurm_release": "24.11",
+    "format_reference": "https://raw.githubusercontent.com/SchedMD/slurm/slurm-24-11-0-1/doc/man/man1/sacctmgr.1",
+    "cumulative_usage_fields": ["GrpTRESMins", "GrpWall"],
+    "simultaneous_requested_minutes_fields": ["GrpTRESRunMins", "MaxTRESRunMinsPU", "MaxTRESRunMinsPA"],
+    "per_job_minutes_fields": ["MaxTRESMinsPJ"],
+    "blank_value_semantics": "unresolved for operator review; never inferred zero or unlimited"}
+
+
+def restriction_requests(resources):
+    """Fixed coverage contract, including visible ancestors and actual tool versions."""
+    def request(query_id, command, arguments, fields=()):
+        return {"query_id": query_id, "command": command, "arguments": arguments, "field_names": list(fields)}
+
+    def table(query_id, entity, fields, options=()):
+        # Explicit widths avoid normal display truncation. Raw output and all
+        # column names survive; an at-width value is still reported as suspect.
+        return request(query_id, "sacctmgr", ["--noheader", "--parsable2", "show", entity, *options,
+            "format=" + ",".join(f"{name}%4096" for name in fields)], fields)
+
+    return [request("sacctmgr_version", "sacctmgr", ["--version"]),
+        request("scontrol_version", "scontrol", ["--version"]),
+        request("partition", "scontrol", ["show", "partition", "dgxh", "--oneliner"]),
+        request("configuration", "scontrol", ["show", "config"]),
+        table("account_associations", "association", ASSOCIATION_FIELDS, [f"account={resources['account']}"]),
+        # Do not filter away parent accounts. WOPLimits preserves where each
+        # limit is set; the account query above retains inherited output too.
+        table("association_hierarchy", "association", ASSOCIATION_FIELDS, ["WOPLimits"]),
+        table("qos", "qos", QOS_FIELDS)]
+
+
+def _restriction_rows(fields, stdout):
+    """Parse strings for collection coverage only, never numerical entitlements."""
+    if not fields:
+        return None, []
+    rows, issues = [], []
+    for number, line in enumerate(stdout.splitlines(), start=1):
+        if not line.strip():
+            continue
+        values = line.split("|")
+        if len(values) != len(fields):
+            issues.append(f"row {number}: expected {len(fields)} columns, received {len(values)}")
+            continue
+        row = dict(zip(fields, (value.strip() for value in values)))
+        if any(len(value) >= 4096 for value in row.values()):
+            issues.append(f"row {number}: field reached display width; obtain untruncated evidence")
+        rows.append(row)
+    if not rows:
+        issues.append("No association/QOS rows were returned; absent evidence is not unlimited")
+    return rows, issues
+
+
+def restriction_collection_issues(reports, resources):
+    """Recompute collection completeness from exact queries and preserved output."""
+    expected = restriction_requests(resources)
+    if type(reports) is not list or len(reports) != len(expected):
+        raise WorkflowError("Restriction report lacks the required version-2 query coverage; recollect evidence")
+    issues, tables = [], {}
+    for actual, spec in zip(reports, expected):
+        exact(actual, set(spec) | {"ok", "stdout", "error", "rows", "blank_fields"}, "restriction query evidence")
+        for key, value in spec.items():
+            same(actual[key], value, f"restriction query coverage {spec['query_id']}/{key}")
+        if type(actual["ok"]) is not bool:
+            raise WorkflowError("Malformed restriction query success flag")
+        if not actual["ok"]:
+            if type(actual["error"]) is not str or not actual["error"]:
+                raise WorkflowError("Failed restriction query must retain an explicit diagnostic")
+            same(actual["rows"], None, "failed query has no accepted rows")
+            same(actual["blank_fields"], [], "failed query blank-field evidence")
+            issues.append(f"{spec['query_id']}: query failed (unsupported fields, denied access or I/O); {actual['error']}")
+            continue
+        same(actual["error"], None, "successful restriction query error")
+        stdout = actual["stdout"]
+        if type(stdout) is not str:
+            raise WorkflowError("Successful restriction query must retain raw output")
+        if not stdout.strip():
+            issues.append(f"{spec['query_id']}: empty output; evidence missing")
+        if spec["query_id"] in ("sacctmgr_version", "scontrol_version") and not re.fullmatch(
+                r"slurm \d+\.\d+(?:\.\d+)?(?:[-+][A-Za-z0-9_.-]+)?", stdout.strip(), re.IGNORECASE):
+            issues.append(f"{spec['query_id']}: unrecognized version output; installed-version evidence missing")
+        rows, row_issues = _restriction_rows(spec["field_names"], stdout)
+        same(actual["rows"], rows, "restriction rows bound to raw output")
+        blanks = [] if rows is None else [{"row_index": i, "field_names": [k for k, v in row.items() if v == ""]}
+                                         for i, row in enumerate(rows) if any(v == "" for v in row.values())]
+        same(actual["blank_fields"], blanks, "explicit blank restriction values")
+        issues.extend(f"{spec['query_id']}: {issue}" for issue in row_issues)
+        if rows is not None:
+            tables[spec["query_id"]] = rows
+    account_rows = tables.get("account_associations", [])
+    if not any(row["Account"] == resources["account"] for row in account_rows):
+        issues.append("No evidence for the explicitly selected account")
+    hierarchy = {}
+    for row in tables.get("association_hierarchy", []):
+        key = (row["Cluster"], row["ID"])
+        if not row["Cluster"] or not re.fullmatch(r"[1-9]\d*", row["ID"]) or key in hierarchy:
+            issues.append("Association hierarchy has missing/duplicate cluster or association identities")
+        hierarchy[key] = row
+    for row in account_rows:
+        key, visited = (row["Cluster"], row["ID"]), set()
+        while True:
+            if key in visited or key not in hierarchy:
+                issues.append(f"Account association {row['Cluster']}/{row['ID']}: ancestor evidence missing/cyclic at {key}")
+                break
+            visited.add(key)
+            parent = hierarchy[key]
+            parent_id = parent["ParentID"]
+            if parent_id in ("", "0"):
+                if parent["ParentName"]:
+                    issues.append(f"Association {key}: parent name present without parent identity")
+                break
+            key = (parent["Cluster"], parent_id)
+    qos_rows = tables.get("qos", [])
+    qos_names = set()
+    for row in qos_rows:
+        if not row["Name"] or row["Name"] in qos_names or not re.fullmatch(r"[1-9]\d*", row["ID"]):
+            issues.append("QOS evidence has missing/duplicate names or invalid QOS identities")
+        qos_names.add(row["Name"])
+    if resources["qos"] is not None and not any(row["Name"] == resources["qos"] for row in qos_rows):
+        issues.append("Explicitly selected QOS is absent from evidence")
+    return issues
+
+
+def validate_restriction_report(report, resources):
+    check_seal(report)
+    version = report.get("restriction_report_version")
+    if type(version) is not int or version != RESTRICTION_REPORT_VERSION:
+        raise WorkflowError(f"Restriction report version {version!r} is not submission-compatible; recollect version 2 evidence and review its digest/bounds (no automatic migration)")
+    exact(report, {"restriction_report_version", "collection_contract", "account", "qos", "partition",
+        "observed_at_utc", "reports", "all_queries_succeeded", "collection_issues", "collection_complete",
+        "automatic_entitlement_interpretation", "document_sha256"}, "restriction report")
+    same(report["collection_contract"], RESTRICTION_COLLECTION, "required restriction collection contract")
+    for key in ("account", "qos", "partition"):
+        same(report[key], resources[key], f"effective restriction report {key}")
+    same(report["automatic_entitlement_interpretation"], False, "explicit operator entitlement review")
+    issues = restriction_collection_issues(report["reports"], resources)
+    same(report["all_queries_succeeded"], all(row["ok"] for row in report["reports"]), "actual query success coverage")
+    same(report["collection_issues"], issues, "actual restriction collection issues")
+    same(report["collection_complete"], not issues, "actual restriction collection completeness")
+    if issues:
+        raise WorkflowError("Incomplete restriction evidence; resolve unsupported fields, permissions or missing scope before review/submission: " + "; ".join(issues))
+    return report
 
 
 def utc_now():
@@ -165,18 +318,19 @@ class SlurmClient:
         r = self.policy.to_dict()["resources"]
         if r["account"] is None:
             raise WorkflowError("Supply the actual Slurm account before inspecting effective restrictions")
-        requests = [("scontrol", ["show", "partition", "dgxh", "--oneliner"]),
-                    ("scontrol", ["show", "config"]),
-                    ("sacctmgr", ["--noheader", "--parsable2", "show", "association", f"account={r['account']}",
-                        "format=Cluster,Account,User,Partition,QOS,DefaultQOS,GrpTRES,GrpTRESMins,MaxTRESMins,MaxWall,MaxJobs,MaxSubmit"]),
-                    ("sacctmgr", ["--noheader", "--parsable2", "show", "qos",
-                        "format=Name,GrpTRES,GrpTRESMins,MaxTRESMins,MaxWall,MaxJobsPU,MaxSubmitJobsPU"])]
         reports = []
-        for command, args in requests:
+        for spec in restriction_requests(r):
             try:
-                reports.append({"command": command, "arguments": args, "ok": True, "stdout": self.invoke(command, args), "error": None})
+                stdout = self.invoke(spec["command"], spec["arguments"])
+                rows, _ = _restriction_rows(spec["field_names"], stdout)
+                blanks = [] if rows is None else [{"row_index": i, "field_names": [k for k, v in row.items() if v == ""]}
+                                                 for i, row in enumerate(rows) if any(v == "" for v in row.values())]
+                reports.append({**spec, "ok": True, "stdout": stdout, "error": None, "rows": rows, "blank_fields": blanks})
             except (OSError, subprocess.SubprocessError, WorkflowError) as exc:
-                reports.append({"command": command, "arguments": args, "ok": False, "stdout": None, "error": str(exc)})
-        return seal({"restriction_report_version": 1, "account": r["account"], "qos": r["qos"], "partition": "dgxh",
+                reports.append({**spec, "ok": False, "stdout": None, "error": str(exc), "rows": None, "blank_fields": []})
+        issues = restriction_collection_issues(reports, r)
+        return seal({"restriction_report_version": RESTRICTION_REPORT_VERSION, "collection_contract": RESTRICTION_COLLECTION,
+            "account": r["account"], "qos": r["qos"], "partition": "dgxh",
             "observed_at_utc": utc_now(), "reports": reports, "all_queries_succeeded": all(r["ok"] for r in reports),
+            "collection_issues": issues, "collection_complete": not issues,
             "automatic_entitlement_interpretation": False})

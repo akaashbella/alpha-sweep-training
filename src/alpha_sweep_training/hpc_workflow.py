@@ -11,8 +11,8 @@ from .data_contract import content_identity
 from .hpc_policy import WorkflowError, load_policy, same, shared_path
 from .manifests import load_manifest, select_task, task_config
 from .serialization import atomic_write_json, durable_mkdir, fsync_directory, read_json, strict_json_text
-from .slurm_client import SlurmClient, utc_now
-from .work_plans import build_work_plan, check_seal, workflow_identity
+from .slurm_client import SlurmClient, utc_now, validate_restriction_report
+from .work_plans import build_work_plan, workflow_identity
 from .work_render import render_work, write_bundle, validate_bundle, submission_arguments, batch_source
 from .workflow_registry import (open_workflow, read_workflow, guarded_root, read_reference,
                                 immutable_json, _read_state, validate_operational_lock)
@@ -26,14 +26,7 @@ def verify_effective_evidence(policy):
         raise WorkflowError("Linked restriction evidence is rejected")
     same(digest_file(path), limits["inspection_report_sha256"], "actual restriction inspection evidence")
     report = read_json(path)
-    check_seal(report)
-    resources = policy.to_dict()["resources"]
-    for key in ("account", "qos", "partition"):
-        same(report[key], resources[key], f"effective restriction report {key}")
-    same(report["restriction_report_version"], 1, "restriction report version")
-    if report["all_queries_succeeded"] is not True:
-        raise WorkflowError("Restriction queries were incomplete; resolve permissions/fields before reviewing effective bounds")
-    return report
+    return validate_restriction_report(report, policy.to_dict()["resources"])
 
 
 def submit_bundle(workflow, bundle, *, execute=False):

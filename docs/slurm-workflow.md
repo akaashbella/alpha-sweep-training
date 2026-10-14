@@ -44,16 +44,55 @@ use all 48 GPU-hours. It also applies the tighter reviewed account/QOS bounds.
 See [OSU Slurm policy](https://it.engineering.oregonstate.edu/hpc/slurm-howto) and
 [cluster description](https://it.engineering.oregonstate.edu/hpc/about-cluster).
 
-`inspect-restrictions` is a future explicit, read-only Slurm operation. It records
-actual `scontrol` partition/config and `sacctmgr` association/QOS output, timestamps,
-query errors and a document seal. It does not automatically interpret entitlements.
-Review inherited associations, selected/default QOS, per-job and simultaneous
-GPU/CPU/memory/time limits, job/submit count limits and accounting configuration.
+`inspect-restrictions` is a future explicit, read-only Slurm operation. Its sealed
+**restriction report version 2** preserves each query's identifier, command,
+arguments, ordered field names, raw output, string-valued rows, blank-field locations
+and error. It collects tool versions, `scontrol` partition/configuration, selected
+account associations with inherited limits, all visible associations with
+`WOPLimits` to expose where limits are set, and QOS records. Association `ID`,
+`ParentID`, `ParentName`, cluster/account/user/partition and QOS/default-QOS columns
+support scope and ancestor review; missing ancestor rows are collection errors.
+
+The field contract uses documented Slurm **24.11** LIST/SHOW names, including
+`MaxTRESPJ`, `MaxTRESPN`, `MaxTRESMinsPJ`, `GrpTRESRunMins`, `GrpJobs`,
+`GrpSubmitJobs`, `MaxJobs` and `MaxSubmitJobs` on associations. QOS adds
+`MaxTRESPU`, `MaxTRESPA`, `MaxTRESRunMinsPU/PA`, `MaxJobsPU/PA`,
+`MaxSubmitJobsPU/PA`, group counts and applicable age-accrual counts. QOS `Flags`,
+`LimitFactor`, `UsageFactor`, `UsageThreshold`, minimum TRES and preemption settings
+are retained. The installed OSU version is **not verified now**; recorded client
+versions and controller configuration must be reviewed for actual compatibility.
+Unsupported fields or denied queries remain errors; there is no reduced-field
+fallback that silently declares sufficient coverage. See the
+[versioned Slurm manual](https://raw.githubusercontent.com/SchedMD/slurm/slurm-24-11-0-1/doc/man/man1/sacctmgr.1).
+
+`GrpTRESMins` and `GrpWall` concern cumulative accounted usage, with enforcement,
+decay/reset and QOS flags affecting interpretation. They are not interchangeable
+with `GrpTRESRunMins` or `MaxTRESRunMinsPU/PA`, which constrain concurrent running
+jobs' requested time. `MaxTRESMinsPJ` constrains a single job. Plain `GrpTRES` and
+per-job/node/user/account TRES fields limit resource quantities. Do not translate
+a cumulative quota into the workflow's overlap budget without reviewing usage and
+enforcement. Blank strings remain explicit unresolved values; they are never
+converted to zero or unlimited. Missing columns/rows, empty version/configuration
+output, suspect display truncation, absent selected account/QOS or missing ancestor
+evidence make `collection_complete` false even if commands exited successfully.
+
+Collection completeness is not an entitlement decision. An operator must review
+inherited association scopes, actual submitting user and cluster, selected/default
+and partition QOS, flags/factors, per-job and simultaneous GPU/CPU/memory/time
+limits, job/submit counts, existing usage and accounting configuration. Private or
+site-specific evidence unavailable to these queries needs administrator review;
+there is no automatic entitlement guess.
+
 Fill `effective_limits` with finite positive tighter bounds (`max_wall_hours`,
 `max_gpus`, `max_cpus`, `max_memory_gb`, `gpu_hours`, `cpu_hours`,
 `memory_gb_hours`, `max_allocations`) plus `inspection_report_path` and the actual
 file SHA-256. Fractional time/memory bounds are supported. Submission verifies the
-report digest, successful queries and account/QOS/partition linkage. Missing
+report digest, version-2 contract, exact query/field coverage, raw-output linkage,
+recomputed collection issues and account/QOS/partition linkage. Version-1 reports
+and unknown report versions cannot authorize new submissions: recollect version-2
+evidence, review it and update the report digest/bounds explicitly (using policy
+adoption after quiescence where a registry already exists). No automatic evidence
+migration or workflow reset occurs. Missing
 account/environment/paths/evidence produces actionable future errors. Reports do
 not prove driver, hardware, filesystem or package capability. Actual Slurm policy
 still controls admission, including unrelated jobs this registry cannot govern.

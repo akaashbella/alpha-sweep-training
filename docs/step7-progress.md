@@ -42,9 +42,9 @@ exclude volatile provenance; bundle/script files and actual checkpoint bindings
 are revalidated; registered startup diagnostics survive missing task outcomes;
 accounting loss affecting multiple older waves is recorded without freeing capacity;
 known queue presence is retained when accounting fails; operator attachment accepts
-bounded partial-array selectors. No further known source-level gap remains in the
-requested Step 7 scope. Runtime behavior, scheduler output compatibility and
-filesystem guarantees remain unverified.
+bounded partial-array selectors. The later restriction-evidence collection gap
+and its source correction are recorded below. Runtime behavior, scheduler output
+compatibility and filesystem guarantees remain unverified.
 
 Pending inputs: scientific training seeds, prepared split identity/preparation seed,
 normalization values/source, drop_last, scheduler interval/warmup factor/minimum LR
@@ -60,8 +60,9 @@ The production `alpha-sweep-workflow` commands and `alpha-sweep-allocation` entr
 point are documented in [the operating guide](slurm-workflow.md). Implementation
 stops before Step 8 aggregation and plotting.
 
-Final working-tree inventory: 16 modified tracked files and 11 untracked
-source/configuration/documentation files; nothing staged, committed or pushed.
+Original Step 7 working-tree inventory before the subsequent commit: 16 modified
+tracked files and 11 untracked source/configuration/documentation files; nothing
+staged, committed or pushed during that implementation turn.
 Scientific schema/configuration, training engine, optimizer/scheduler and randomness
 sources were inspected against Git and remain unchanged.
 
@@ -71,3 +72,38 @@ research/workflow manifests/artifacts/rendered bundles/results, experiments or
 Slurm queries/submissions/cancellation/requeue/HPC jobs were performed. Only
 source/config/documentation edits, source/Git inspection and official documentation
 consultation occurred. Runtime correctness remains unverified.
+
+## Restriction-evidence source correction
+
+Correction baseline: clean working tree at
+`d6f15f22c545dbfc4693fea42af0e643fa02195f`. Only `slurm_client.py`,
+`hpc_workflow.py`, this progress note and the operating guide were changed.
+
+The old successful-query flag did not establish simultaneous-time, per-job/node,
+user/account or aggregate job-count collection coverage. Restriction report version
+2 now records documented Slurm 24.11 association/QOS field names, exact arguments,
+tool-version output, visible hierarchy identifiers, raw output and string rows,
+explicit blank-field locations, failures and collection issues. It includes
+`GrpTRESRunMins`, job/node/user/account resource and running-minute limits, group/
+account/user job and submit limits, and QOS flags/factors. The guide distinguishes
+cumulative usage from simultaneous requested-time and per-job limits.
+
+Submission revalidates the seal/file digest, exact required collection contract,
+query/field coverage and rows against raw output, missing scope/ancestor evidence
+and recomputed collection completeness. Version 1 and unknown report versions
+are explicitly rejected for submission; recollection and operator review are
+required, with no automatic migration, reduced-field fallback or entitlement
+interpretation. Actual installed Slurm compatibility, permissions, inheritance,
+usage/enforcement and reviewed effective bounds remain operational inputs.
+
+Static review traced successful complete collection, unsupported/denied queries,
+empty/malformed output, explicit blank limits, absent account/QOS/ancestor evidence,
+incomplete successful queries and old/unknown report rejection. No runtime
+verification was performed. Workflow ownership, concurrency, submission recovery,
+scientific fingerprints, training state, checkpoint bindings and evaluation seeds
+were not changed. No Step 8 implementation was added.
+
+Correction working-tree inventory: four modified tracked files, no untracked or
+staged files; no commit or push performed. No project code, tests, imports,
+compilation/linting, installation, artifacts, Slurm commands or jobs were executed
+or generated. Runtime correctness remains unverified.
