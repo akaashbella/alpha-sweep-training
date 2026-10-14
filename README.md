@@ -4,7 +4,7 @@ Research implementation for how **training-time Gaussian weight perturbation**
 affects clean performance and independently measured fixed-network weight
 robustness across CNN architectures.
 
-Steps 1–7 implement the scientific specification, strict configuration,
+Steps 1–8 implement the scientific specification, strict configuration,
 scientific run identity, safe artifact initialization, shared CIFAR preparation,
 reproducible full-set loaders, all four scratch CIFAR model builders, eligible
 weight discovery, fixed optimizers, the original-budget warmup/cosine scheduler,
@@ -17,8 +17,15 @@ The approved post-Step-6 integration separates training completion from independ
 best checkpoint, 6,720 logical slots across the unchanged 240 training tasks.
 These implementations **have not been executed or runtime-verified**.
 Step 7 adds production Slurm planning/submission, signals and durable workflow
-tracking in source. Aggregation/plotting and final integration remain later steps.
+tracking in source. Step 8 adds authoritative results, complete prescribed summaries,
+validation-only alpha selection and headless scientific figures. Final integration
+remains Step 9.
 Production commands are implemented for later authorized HPC use only.
+
+The [results/figures guide](docs/results-and-figures.md) documents `alpha-sweep-report`
+collect/summarize/plot/inspect, frozen 240-task/6720-slot coverage, sample SD,
+co-winners, paired comparisons, output ownership and the optional reporting extra.
+See [Step 8 progress](docs/step8-progress.md) for source review without execution.
 
 The main grid contains 240 research runs: CIFAR-10 then CIFAR-100, four
 architectures, ten alphas, three training seeds; each run uses 200 epochs and

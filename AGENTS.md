@@ -12,6 +12,8 @@ The approved independent evaluation protocol supersedes clean-only testing:
 [docs/weight-robustness-evaluation.md](docs/weight-robustness-evaluation.md).
 Implemented production scheduling, operational policy, signals and workflow authority:
 [docs/slurm-workflow.md](docs/slurm-workflow.md).
+Implemented results/figures contracts and reporting-only ownership:
+[docs/results-and-figures.md](docs/results-and-figures.md).
 
 ## Implementation-only workflow
 
@@ -186,6 +188,18 @@ replicates 1–3 (28 slots/checkpoint, 6,720 total). Do not add other perturbati
   Step 7 commands are implemented but never run during source-only development.
 
 ## HPC constraints
+
+Step 8 reporting joins the full manifest to historical journal/slot authorities,
+never aliases or scheduler outcomes. Preserve all 240/6720 expected observations,
+null unbound checkpoint/seeds, explicit failures and independently verified sweep
+completion. Reporting never acquires research writer locks or repairs raw storage.
+Use sample SD ddof=1; complete prescribed three-seed/realization sets for official
+means. Average realizations within each checkpoint before cross-seed summaries.
+Select training alpha only from all ten complete validation candidates; retain all
+exact mean ties in grid order. Preserve paired descriptive differences and every
+individual seed/realization. Derived reporting-v1 storage is separately guarded,
+finite, checksummed and never a scientific completion authority. Step 8 stops
+before Step 9; no reporting commands/figures are run during implementation.
 
 Target OSU `dgxh`: one GPU and one training process per independent
 dataset–architecture–alpha–seed run. Continue across allocations without resetting

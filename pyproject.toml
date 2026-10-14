@@ -19,6 +19,10 @@ alpha-sweep-prepare = "alpha_sweep_training.prepare:main"
 alpha-sweep = "alpha_sweep_training.controller:main"
 alpha-sweep-workflow = "alpha_sweep_training.hpc_workflow:main"
 alpha-sweep-allocation = "alpha_sweep_training.allocation_runner:main"
+alpha-sweep-report = "alpha_sweep_training.reporting:main"
+
+[project.optional-dependencies]
+reporting = ["matplotlib>=3.8,<3.11"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
