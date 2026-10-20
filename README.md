@@ -35,12 +35,6 @@ The main grid contains 240 research runs: CIFAR-10 then CIFAR-100, four
 architectures, ten alphas, three training seeds; each run uses 200 epochs and
 batch size 128. See [the authoritative scientific specification](docs/scientific-specification.md).
 
-Read [AGENTS.md](AGENTS.md) before editing. All nine implementation steps use an
-implementation-only workflow: no tests, package installation, code execution,
-datasets, preliminary experiments, compilation/linting, or job submission.
-Runtime verification is deferred to OSU HPC after implementation. Source review
-is not evidence of runtime correctness.
-
 The [configuration guide](docs/configuration.md) describes schema version 4,
 layering, unresolved settings, fingerprints, and artifact operations.
 [configs/research.yaml](configs/research.yaml) is a full-budget development
