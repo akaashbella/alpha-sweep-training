@@ -1,5 +1,5 @@
 # Operational declarations only. Fill shared Linux paths/account/evidence later.
-policy_version: 1
+policy_version: 2
 resources:
   partition: dgxh
   account: null
@@ -11,6 +11,7 @@ resources:
   memory_gb: 32
   wall_time: '12:00:00'
   max_concurrent: 4
+  max_queued: 40
   num_workers: 4
   native_threads: 4
 paths:
@@ -46,4 +47,7 @@ commands:
   timeout_seconds: 30
 # Fill reviewed tighter account/QOS bounds plus an actual inspection report path
 # and SHA-256. Publication limits are implemented in hpc_policy.py, not entitlements.
+# v2: max_allocations bounds running jobs. Separately review max_submitted_tasks
+# (pending + running allowance), max_array_size and max_array_tasks. No defaults
+# for these entitlements; array caps must agree with the sealed scontrol evidence.
 effective_limits: null
