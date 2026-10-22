@@ -1,5 +1,33 @@
 # Step 9 final source integration
 
+## Later planning-validation performance correction
+
+The [performance correction and measurements](planning-validation-performance.md)
+address repeated journal/checkpoint/completion inspection and per-layer provenance
+serialization. Planning now reuses stable observations and tensor-free journal
+metadata only within one operation, snapshots relevant artifacts/ownership before
+reuse, and performs a final fresh guard before durable submission intent. Actual
+eligibility, scheduler reconciliation, source/software/launch pins, scientific
+completion and the CIFAR-100 training gate remain authoritative. CSV bytes are
+unchanged; progress is stderr-only. Existing queue/throttle policy and histories
+remain unchanged.
+
+Unlike the historical source-only Step 9 work below, the latest request explicitly
+authorized focused equivalence/invalidation tests and a synthetic benchmark. Local
+CSV reconstruction improved 1.82×; combined synthetic repeated planning improved
+4.28× (38.032 s to 8.881 s). Windows pure-read performance regressed because safe
+snapshot hashing dominates; POSIX/HPC end-to-end improvement remains unmeasured.
+No torch/models/data/research, packages, Slurm commands/jobs or HPC changes were
+run. The operating guide links the actual measurements, test boundaries and safe
+staged transfer retaining private email/scheduler patches and frozen continuation
+source. Historical Git inventories below describe earlier turns.
+
+Final focused discovery ran 25 cases: 24 passed, one real-symlink case skipped for
+Windows privileges; the mocked linked-ancestor check and existing queue/legacy-wave
+checks passed. This correction leaves nine tracked files modified and adds four
+implementation/documentation/verification files; the pre-existing untracked
+`AGENTS.md` is preserved. Nothing was staged, committed, pushed or transferred.
+
 The original Step 9 record below is historical. Its recovery-readability claims
 are corrected by the historical-policy follow-up at the end of this note; the
 original Git inventory describes that implementation turn, not the current tree.

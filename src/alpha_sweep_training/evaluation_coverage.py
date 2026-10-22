@@ -110,6 +110,20 @@ def inspect_robustness_completion(root, inputs):
 
 
 def collect_evaluation_coverage(inputs, *, evaluation_root=None, evaluator_provenance=None):
+    from .planning_inspection import active_inspection, compatibility_key
+    from .serialization import strict_json_text
+    inspection = active_inspection()
+    if inspection is None:
+        return _collect_evaluation_coverage(inputs, evaluation_root=evaluation_root,
+                                          evaluator_provenance=evaluator_provenance)
+    root = evaluation_directory(inputs, evaluation_root=evaluation_root)
+    key = ("evaluation_coverage", str(root), strict_json_text(inputs.binding),
+           compatibility_key(evaluator_provenance))
+    return inspection.reuse(key, (root,), lambda: _collect_evaluation_coverage(
+        inputs, evaluation_root=evaluation_root, evaluator_provenance=evaluator_provenance))
+
+
+def _collect_evaluation_coverage(inputs, *, evaluation_root=None, evaluator_provenance=None):
     root = evaluation_directory(inputs, evaluation_root=evaluation_root)
     rows = [observe_evaluation_slot(inputs, slot, evaluation_root=evaluation_root,
                                    evaluator_provenance=evaluator_provenance) for slot in prescribed_slots()]

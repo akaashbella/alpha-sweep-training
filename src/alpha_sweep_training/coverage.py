@@ -73,6 +73,19 @@ def _stamp(paths):
 
 
 def inspect_task(task: Task, *, base_dir, overrides=None, provenance=None) -> TaskObservation:
+    from .planning_inspection import active_inspection, training_paths, compatibility_key
+    inspection = active_inspection()
+    if inspection is None:
+        return _inspect_task(task, base_dir=base_dir, overrides=overrides, provenance=provenance)
+    config = effective_storage_config(task_config(task, overrides), base_dir)
+    paths = resolve_run_paths(config, base_dir)
+    key = ("observation", task.run_id, strict_json_text(task.prepared_data),
+           strict_json_text(config.to_dict()), compatibility_key(provenance))
+    return inspection.reuse(key, training_paths(paths), lambda: _inspect_task(
+        task, base_dir=base_dir, overrides=overrides, provenance=provenance))
+
+
+def _inspect_task(task: Task, *, base_dir, overrides=None, provenance=None) -> TaskObservation:
     """Use saved provenance for historical coverage, actual provenance for dispatch.
 
     Imports of checkpoint readers are lazy. They restricted-load CPU state and
@@ -128,14 +141,13 @@ def inspect_task(task: Task, *, base_dir, overrides=None, provenance=None) -> Ta
                            for key, value in identity_metadata(config).items()):
                         raise _Incompatible(f"Artifact-root owner disagrees with selected task: {marker}")
             saved = metadata["provenance"]
-            saved = software_provenance(code=saved["code"], software=saved["software"], allocation=saved.get("allocation"))
+            software_provenance(code=saved["code"], software=saved["software"], allocation=saved.get("allocation"))
             current_provenance = saved if provenance is None else software_provenance(
                 code=provenance["code"], software=provenance["software"], allocation=provenance.get("allocation"))
             _check_existing(paths, config, "recover", saved)
             from .checkpoint_journal import numerical_failure_evidence, execution_failure_evidence, read_committed
             from .checkpoint_io import ArtifactReference, read_document
-            from .recovery import inspect_completion
-            current = read_committed(paths, config, saved)
+            current = read_committed(paths, config, saved, metadata_only=True)
             budget_complete = current.receipt.completed_epochs == EPOCHS
             if not budget_complete and (saved["code"]["source_sha256"] != current_provenance["code"]["source_sha256"]
                     or saved["software"] != current_provenance["software"]):
@@ -150,10 +162,9 @@ def inspect_task(task: Task, *, base_dir, overrides=None, provenance=None) -> Ta
             failure_ref = current.document["artifacts"]["failure"]
             failure = None if failure_ref is None else read_document(paths, ArtifactReference.from_dict(failure_ref))["payload"]
             training_complete = current.status in ("completed", "training_completed")
-            if training_complete:
-                completion = inspect_completion(config, base_dir=base_dir, provenance=current_provenance)
-                if completion is None or completion.transaction != current.reference:
-                    raise RuntimeError("Completion changed during inspection")
+            # read_committed already validates completion, immutable CSV bytes,
+            # best/final bindings and ancestry. Do not load the journal a second
+            # time through recovery.inspect_completion; the after stamp remains.
             count = current.receipt.completed_epochs
             values = {"condition": "ok", "stored_status": current.status, "completed_epochs": count,
                 "training_complete": training_complete, "full_budget_committed": budget_complete,
@@ -212,7 +223,14 @@ def _counts(rows):
 def collect_coverage(manifest: Manifest, *, base_dir, overrides=None) -> dict:
     manifest = manifest_from_dict(manifest.to_dict())
     task_config(manifest.tasks[0], overrides)  # Invalid global overrides reject the command itself.
-    rows = tuple(inspect_task(t, base_dir=base_dir, overrides=overrides) for t in manifest.tasks)
+    from .planning_inspection import active_inspection
+    inspection = active_inspection()
+    rows = []
+    for index, task in enumerate(manifest.tasks, 1):
+        if inspection is not None:
+            inspection.progress(f"Training authority {index}/{len(manifest.tasks)}: {task.run_id}")
+        rows.append(inspect_task(task, base_dir=base_dir, overrides=overrides))
+    rows = tuple(rows)
     phases = []
     for phase, dataset in enumerate(DATASETS, start=1):
         selected = tuple(r for r in rows if r.phase == phase)

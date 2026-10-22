@@ -4,6 +4,8 @@ No file in this module is an authoritative progress counter. CSV publication is
 delegated with checkpoints; train.log is an append-only diagnostic event stream.
 """
 
+from __future__ import annotations
+
 from copy import deepcopy
 from dataclasses import asdict, dataclass
 import csv
@@ -12,19 +14,18 @@ import io
 import json
 import math
 import os
-from typing import Iterable
+from typing import Iterable, TYPE_CHECKING
 
-import torch
-from torch import nn
+if TYPE_CHECKING:
+    import torch
+    from torch import nn
+    from .data import LoaderMetadata
 
 from .artifacts import RunHandle, RunDirectoryError
 from .component_contracts import ComponentError, finite_number, integer_count
-from .data import LoaderMetadata
 from .identity import canonical_alpha, identity_metadata
-from .numerical import NumericalFailure, require_finite
 from .serialization import strict_json_text
 from .spec import EPOCHS, TRAINING_ENGINE_VERSION, TRAINING_RECORD_VERSION, VALIDATION_SIZE
-from .weights import discover_eligible_weights
 
 
 @dataclass(frozen=True)
@@ -72,12 +73,14 @@ class ClassificationMetrics:
 
 class MetricAccumulator:
     def __init__(self, device: torch.device):
+        import torch
         self.loss_sum = torch.zeros((), dtype=torch.float64, device=device)
         self.correct = torch.zeros((), dtype=torch.int64, device=device)
         self.examples = 0
         self.batches = 0
 
     def add(self, loss: torch.Tensor, logits: torch.Tensor, labels: torch.Tensor) -> None:
+        import torch
         size = labels.numel()
         with torch.no_grad():
             self.loss_sum.add_(loss.detach().to(dtype=torch.float64) * size)
@@ -86,6 +89,7 @@ class MetricAccumulator:
         self.batches += 1
 
     def finish(self) -> ClassificationMetrics:
+        from .numerical import require_finite
         require_finite((("sample_weighted_loss_sum", self.loss_sum),), "epoch_metrics")
         if not self.examples:
             raise ComponentError("Cannot report an empty epoch/evaluation")
@@ -125,6 +129,9 @@ class LayerStatistic:
 
 
 def clean_layer_statistics(model: nn.Module) -> tuple[LayerStatistic, ...]:
+    import torch
+    from .numerical import NumericalFailure
+    from .weights import discover_eligible_weights
     if getattr(model, "_alpha_sweep_perturbation_active", False):
         raise ComponentError("Statistics require original clean weights after training updates")
     entries = discover_eligible_weights(model)
@@ -272,7 +279,8 @@ def epoch_csv(context: RecordContext, record: EpochRecord, *, include_header: bo
 
 def layer_statistics_csv(context: RecordContext, record: EpochRecord,
                          statistics: tuple[LayerStatistic, ...], *, include_header: bool) -> str:
-    rows = [{**_identity_columns(context), "epoch_index": record.epoch_index,
+    identity = _identity_columns(context)
+    rows = [{**identity, "epoch_index": record.epoch_index,
              "completed_epochs": record.completed_epochs, "status": record.status,
              "boundary": "after_training_updates_before_clean_validation", **asdict(statistic),
              "shape": _json_cell(statistic.shape), "std_correction": 0, "weights": "clean"}

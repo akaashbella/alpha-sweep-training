@@ -13,6 +13,7 @@ from .manifests import load_manifest, select_task, task_config
 from .serialization import atomic_write_json, durable_mkdir, fsync_directory, read_json, strict_json_text
 from .slurm_client import SlurmClient, utc_now, validate_restriction_report
 from .work_plans import build_work_plan, workflow_identity
+from .planning_inspection import PlanningInspection, stderr_progress
 from .work_render import render_work, write_bundle, validate_bundle, submission_arguments, batch_source
 from .workflow_registry import (open_workflow, read_workflow, guarded_root, read_reference,
                                 immutable_json, _read_state, validate_operational_lock)
@@ -31,10 +32,12 @@ def verify_effective_evidence(policy):
     return report
 
 
-def submit_bundle(workflow, bundle, *, execute=False):
+def submit_bundle(workflow, bundle, *, execute=False, inspection=None):
     """Only submission entry point: guarded fresh selection, intent, then sbatch."""
     if execute is not True:
         raise WorkflowError("Submission requires the explicit --execute/--submit operational action")
+    inspection = inspection or PlanningInspection(stderr_progress)
+    inspection.progress("Submission preflight: validating bundle, launch inputs and restriction evidence")
     workflow.guard()
     policy, manifest = workflow.policy, workflow.manifest
     validate_bundle(bundle, manifest, policy)
@@ -42,13 +45,14 @@ def submit_bundle(workflow, bundle, *, execute=False):
     require_launch_inputs(bundle["execution_provenance"], policy)
     verify_effective_evidence(policy)
     client = SlurmClient(policy)
+    inspection.progress("Submission preflight: reconciling scheduler/registry ownership")
     workflow.reconcile(client)
     retries = [item["training_run_id"] for item in bundle["items"] if item["operator_retry_reason"] is not None]
     reasons = {item["operator_retry_reason"] for item in bundle["items"] if item["operator_retry_reason"] is not None}
     if len(reasons) > 1:
         raise WorkflowError("A wave must have one coherent audited operator retry decision")
     current = build_work_plan(manifest, policy, manifest_path=bundle["manifest_path"], state=workflow.state,
-                              retry_run_ids=retries, retry_reason=next(iter(reasons), None))
+                              retry_run_ids=retries, retry_reason=next(iter(reasons), None), inspection=inspection)
     current_items = {item["unit_key"]: item for item in current["items"]}
     for item in bundle["items"]:
         if item["unit_key"] not in current_items:
@@ -70,8 +74,11 @@ def submit_bundle(workflow, bundle, *, execute=False):
     durable_mkdir(logs)
     argv = submission_arguments(bundle, policy)
     reference = {"relative_path": relative, "sha256": digest_file(target)}
+    inspection.progress("Submission preflight: fresh artifact/authority/ownership guard before durable intent")
+    inspection.assert_unchanged()
     wave = workflow.reserve(bundle, reference, argv)
     try:
+        inspection.progress(f"Submission intent durable: invoking sbatch for wave {bundle['wave_id']}")
         scheduler = client.submit(argv, workflow=workflow, wave_id=bundle["wave_id"])
         workflow.record_acknowledgement(bundle["wave_id"], scheduler)
         return {"outcome": "submitted", "wave_id": bundle["wave_id"], "scheduler": scheduler}
@@ -292,7 +299,7 @@ def main(argv=None):
             shared_path(manifest_path, "shared full manifest path")
             if args.command == "plan":
                 result = build_work_plan(manifest, policy, manifest_path=manifest_path, state=read_workflow(manifest, policy),
-                    retry_run_ids=args.retry_run_id, retry_reason=args.retry_reason)
+                    retry_run_ids=args.retry_run_id, retry_reason=args.retry_reason, progress=stderr_progress)
             elif args.command == "status":
                 historical_only = args.workflow_only or policy.to_dict()["paths"]["split_file"] is not None
                 state = read_workflow(manifest, policy, recovery_only=historical_only)
@@ -333,14 +340,16 @@ def main(argv=None):
                     elif args.command == "reconcile":
                         result = workflow.reconcile(SlurmClient(policy))
                     elif args.command == "advance":
+                        inspection = PlanningInspection(stderr_progress)
+                        inspection.progress("Advance: reconciling scheduler/registry ownership")
                         workflow.reconcile(SlurmClient(policy))
                         plan = build_work_plan(manifest, policy, manifest_path=manifest_path, state=workflow.state,
-                            retry_run_ids=args.retry_run_id, retry_reason=args.retry_reason)
+                            retry_run_ids=args.retry_run_id, retry_reason=args.retry_reason, inspection=inspection)
                         result = {"plan": plan, "submitted": False}
                         if args.submit and plan["items"] and not plan["unresolved_waves"]:
                             bundle, script = render_work(plan, manifest, policy)
                             write_bundle(workflow, bundle, script)
-                            result.update(submission=submit_bundle(workflow, bundle, execute=True))
+                            result.update(submission=submit_bundle(workflow, bundle, execute=True, inspection=inspection))
                             result["submitted"] = result["submission"]["outcome"] == "submitted"
                     elif args.command == "resolve-submission":
                         result = resolve_submission(workflow, args.wave_id, job_id=args.job_id, cluster=args.cluster,

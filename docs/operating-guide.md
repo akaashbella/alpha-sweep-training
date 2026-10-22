@@ -7,6 +7,13 @@ preparation, artifact generation, reporting and Slurm/research execution. Nothin
 in this sequence was executed during Step 9. Runtime correctness, launch readiness,
 resource needs and experiment completion remain unverified.
 
+The later [planning-validation performance correction](planning-validation-performance.md)
+documents operation-local validation reuse, fresh pre-submission checks, stderr
+progress, explicitly authorized isolated tests/benchmark measurements and safe
+staged transfer. It preserves the existing 40-queued/4-running policy and all
+scientific authority. Local synthetic verification does not establish HPC runtime
+correctness or authorize research execution.
+
 The authoritative [scientific specification](scientific-specification.md) fixes
 240 training tasks and 6,720 independent evaluation slots. Component guides below
 define the detailed contracts; this guide orders their use. Shell variables denote

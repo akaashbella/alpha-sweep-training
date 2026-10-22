@@ -27,12 +27,14 @@ class TrainedCheckpoint:
     legacy_clean: dict | None
 
 
-def bind_evaluation_checkpoint(task: Task, *, base_dir, overrides=None) -> TrainedCheckpoint:
+def bind_evaluation_checkpoint(task: Task, *, base_dir, overrides=None, metadata_only=False) -> TrainedCheckpoint:
     """No source equality with current evaluator; no runtime/model/optimizer/RNG restore.
 
     Restricted CPU loading validates saved provenance against itself, pinned
     checkpoint/component formats and full-budget journal/record authority. Actual
     model construction later verifies its complete native metadata and inventory.
+    metadata_only is for planning: payload contains validated metadata only, never
+    executable model state. Execution callers retain the full payload by default.
     """
     observation = inspect_task(task, base_dir=base_dir, overrides=overrides)
     if observation.condition != "ok" or not observation.evaluation_eligible:
@@ -44,11 +46,13 @@ def bind_evaluation_checkpoint(task: Task, *, base_dir, overrides=None) -> Train
         fail("Training writer lock appeared; inspect after it exits")
     stored = read_json(paths.metadata / "run_metadata.json")["provenance"]
     _check_existing(paths, config, "recover", stored)
-    current = read_committed(paths, config, stored)
+    current = read_committed(paths, config, stored, metadata_only=metadata_only)
     if current.receipt.completed_epochs != EPOCHS:
         fail("Evaluation cannot bind an unfinished training boundary")
     best = current.receipt.best
-    payload = read_checkpoint(paths, best, config, stored)
+    # Planning needs the already validated best metadata, never another tensor
+    # load. Execution retains the full independently validated payload contract.
+    payload = {"metadata": current.best_metadata} if metadata_only else read_checkpoint(paths, best, config, stored)
     data = payload["metadata"]["data_identity"]
     if any(data[k] != v for k, v in task.prepared_data.items()):
         fail("Best checkpoint prepared identities disagree with training manifest")

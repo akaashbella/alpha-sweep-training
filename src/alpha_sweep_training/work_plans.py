@@ -57,7 +57,20 @@ def wave_reservations(state, policy):
     return {"reserved_queued_tasks": queued, "reserved_running_tasks": running}
 
 
-def build_work_plan(manifest, policy, *, manifest_path, state=None, retry_run_ids=(), retry_reason=None):
+def build_work_plan(manifest, policy, *, manifest_path, state=None, retry_run_ids=(), retry_reason=None,
+                    inspection=None, progress=None):
+    from .planning_inspection import PlanningInspection
+    inspection = inspection or PlanningInspection(progress)
+    inspection.progress("Planning: validating training authority and eligibility")
+    with inspection.activate():
+        result = _build_work_plan(manifest, policy, manifest_path=manifest_path, state=state,
+                                  retry_run_ids=retry_run_ids, retry_reason=retry_reason)
+    inspection.progress(f"Planning complete: {len(result['items'])} eligible work units; "
+                        f"{inspection.hits} unchanged reads reused, {inspection.validations} validations")
+    return result
+
+
+def _build_work_plan(manifest, policy, *, manifest_path, state=None, retry_run_ids=(), retry_reason=None):
     """Future read-only planning; no sbatch, builders, iterations, or repair.
 
     Each candidate uses actual science authority and recorded allocation outcome.
@@ -151,7 +164,10 @@ def build_work_plan(manifest, policy, *, manifest_path, state=None, retry_run_id
             observations.append({"training_run_id": task.run_id, "lifecycle": "evaluation", "classification": "checkpoint_not_eligible"})
             continue
         try:
-            inputs = bind_evaluation_checkpoint(task, base_dir=base, overrides=overrides)
+            from .planning_inspection import active_inspection
+            inspection = active_inspection()
+            inspection.progress(f"Evaluation eligibility: {task.run_id}")
+            inputs = bind_evaluation_checkpoint(task, base_dir=base, overrides=overrides, metadata_only=True)
             evaluation = collect_evaluation_coverage(inputs, evaluation_root=doc["paths"]["evaluation_root"], evaluator_provenance=provenance)
             counts = evaluation["counts"]
             if evaluation["robustness_completed"]:

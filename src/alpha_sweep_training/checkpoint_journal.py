@@ -78,13 +78,44 @@ class CommittedState:
     receipt: CommitReceipt
     latest: dict
     records: tuple
+    best_metadata: dict | None = None
 
     @property
     def status(self) -> str:
         return self.document["status"]
 
 
-def read_committed(paths: RunPaths, config, provenance, *, verify_previous: bool = True) -> CommittedState:
+def read_committed(paths: RunPaths, config, provenance, *, verify_previous: bool = True,
+                   metadata_only: bool = False) -> CommittedState:
+    """Validate full authority; planning may retain only compact, tensor-free evidence.
+
+    Runtime/persistence callers always take the uncached full-state path. Planning
+    reuse is operation-local and invalidates on any storage/ownership mutation.
+    """
+    def validate():
+        result = _read_committed(paths, config, provenance, verify_previous=verify_previous,
+                                 reuse_checkpoints=inspection is not None)
+        if not metadata_only:
+            return result
+        return CommittedState(result.head, result.reference, result.document, result.receipt,
+                              {"metadata": result.latest["metadata"]}, (), result.best_metadata)
+
+    from .planning_inspection import active_inspection, training_paths
+    from .serialization import strict_json_text
+    inspection = active_inspection() if metadata_only else None
+    if inspection is None:
+        return validate()
+    key = ("committed", strict_json_text(config.to_dict()), strict_json_text(provenance), verify_previous)
+    return inspection.reuse(key, training_paths(paths), validate)
+
+
+def _read_committed(paths: RunPaths, config, provenance, *, verify_previous: bool = True,
+                    reuse_checkpoints: bool = False) -> CommittedState:
+    # Current and previous transactions often reference identical immutable
+    # checkpoints. Reuse within this one validated read, release tensors before
+    # returning compact evidence, and never enable this for runtime writers.
+    from .planning_inspection import PlanningInspection
+    checkpoints = PlanningInspection() if reuse_checkpoints else None
     path = relative_file(paths.metadata, HEAD_PATH)
     if not path.is_file():
         fail("No durable initial boundary: preserve this partially initialized run; explicit recovery/archived overwrite is required")
@@ -95,11 +126,12 @@ def read_committed(paths: RunPaths, config, provenance, *, verify_previous: bool
     document = transaction(paths, ref, config, provenance)
     same(head["format_version"], document["format_version"], "HEAD/current transaction version")
     same(document["parent"], head["previous"], "HEAD previous generation")
-    result = validate_committed_document(paths, head, ref, document, config, provenance)
+    result = validate_committed_document(paths, head, ref, document, config, provenance, checkpoint_cache=checkpoints)
     if verify_previous and head["previous"] is not None:
         previous_ref = ArtifactReference.from_dict(head["previous"])
         previous = transaction(paths, previous_ref, config, provenance)
-        validate_committed_document(paths, {"previous": previous["parent"]}, previous_ref, previous, config, provenance)
+        validate_committed_document(paths, {"previous": previous["parent"]}, previous_ref, previous, config, provenance,
+                                    checkpoint_cache=checkpoints)
         if document["kind"] == "epoch":
             same(document["counters"]["completed_epochs"], previous["counters"]["completed_epochs"] + 1, "committed epoch ancestry")
             same(document["records"][:-1], previous["records"], "epoch record ancestry")
@@ -110,7 +142,7 @@ def read_committed(paths: RunPaths, config, provenance, *, verify_previous: bool
     return result
 
 
-def validate_committed_document(paths, head, ref, document, config, provenance) -> CommittedState:
+def validate_committed_document(paths, head, ref, document, config, provenance, *, checkpoint_cache=None) -> CommittedState:
     counters = Counters(**exact(document["counters"], set(asdict(Counters())), "committed counters"))
     best = None if document["best"] is None else BestSelection(**exact(document["best"], {"epoch_index", "correct", "examples"}, "committed best"))
     receipt = receipt_from_dict(document["receipt"])
@@ -119,7 +151,15 @@ def validate_committed_document(paths, head, ref, document, config, provenance) 
     for role in ("latest", "best", "final"):
         checkpoint = getattr(receipt, role)
         if checkpoint is not None:
-            payloads[role] = read_checkpoint(paths, checkpoint, config, provenance)
+            if checkpoint_cache is None:
+                payloads[role] = read_checkpoint(paths, checkpoint, config, provenance)
+            else:
+                from .planning_inspection import compatibility_key
+                from .serialization import strict_json_text
+                path = relative_file(paths.checkpoints, checkpoint.relative_path)
+                key = ("checkpoint", checkpoint, strict_json_text(config.to_dict()), compatibility_key(provenance))
+                payloads[role] = checkpoint_cache.reuse(key, (path,),
+                    lambda: read_checkpoint(paths, checkpoint, config, provenance))
             if checkpoint.relative_path != f"generations/{payloads[role]['metadata']['generation']}.{role}.pt":
                 fail("Role checkpoint reference is not its immutable generation")
     latest = payloads["latest"]
@@ -167,7 +207,8 @@ def validate_committed_document(paths, head, ref, document, config, provenance) 
         validate_failure_payload(failure["payload"], counters, receipt)
     elif document["kind"] == "failure":
         fail("Missing durable failure record")
-    return CommittedState(head, ref, document, receipt, latest, tuple(records))
+    return CommittedState(head, ref, document, receipt, latest, tuple(records),
+                          None if "best" not in payloads else payloads["best"]["metadata"])
 
 
 def validate_training_completion(paths, document, receipt, config, provenance, records):
@@ -205,6 +246,10 @@ def validate_training_completion(paths, document, receipt, config, provenance, r
     if type(summary["completed_at_utc"]) is not str or not summary["completed_at_utc"]:
         fail("Training completion requires creation time")
     from .persistence import csv_views
+    from .planning_inspection import active_inspection
+    inspection = active_inspection()
+    if inspection is not None:
+        inspection.progress("Verifying immutable training-completion CSV bytes against validated epoch/layer records")
     epochs, layers = csv_views(records)
     exact(summary["metric_artifacts"], {"epochs_csv", "layer_statistics_csv"}, "training CSV references")
     for name, expected in (("epochs_csv", epochs), ("layer_statistics_csv", layers)):
