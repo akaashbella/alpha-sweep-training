@@ -15,7 +15,8 @@ strict full-grid manifests, one-task execution and read-only coverage.
 The approved post-Step-6 integration separates training completion from independent
 `weight_robustness_eval_v1`: one clean and 27 perturbed full-test realizations per
 best checkpoint, 6,720 logical slots across the unchanged 240 training tasks.
-These implementations **have not been executed or runtime-verified**.
+Research computation **has not been runtime-verified**. Later focused operational
+queue-policy checks do not establish HPC/research runtime correctness.
 Step 7 adds production Slurm planning/submission, signals and durable workflow
 tracking in source. Step 8 adds authoritative results, complete prescribed summaries,
 validation-only alpha selection and headless scientific figures. Step 9 completes
@@ -84,4 +85,8 @@ The [Slurm operating guide](docs/slurm-workflow.md) documents strict separate
 rendering, explicit submission, status/reconciliation/advancement and recovery.
 One shared registry limits both lifecycles to a single bounded wave; immutable
 mapping/intent, exact scheduler IDs and scientific authority remain separate.
+The [queued-array update](docs/queued-slurm-arrays.md) supports 40 queued tasks
+with a separate four-task running throttle, reviewed submission/array limits,
+unchanged legacy-wave reading and explicit safe transfer/migration to HPC. The
+active HPC checkout and its private email/scheduler changes are not modified here.
 The [Step 7 progress note](docs/step7-progress.md) records source review only.

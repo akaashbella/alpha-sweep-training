@@ -1,22 +1,28 @@
 # Production OSU dgxh workflow
 
 Step 7 is implemented in source only. None of the commands below was executed.
-No tests, project imports/execution, compilation/linting, environment installation,
+During the original Step 7/9 work, no tests, project imports/execution, compilation/linting, environment installation,
 downloads/preparation, models, research manifests, workflow artifacts, rendered
 bundles, training/evaluation/results, experiments or Slurm/HPC commands/jobs were
 created or run during implementation. Runtime correctness is unverified. All nine
 steps are now complete in source; [operating-guide.md](operating-guide.md) orders
 future operation and recovery. Stop at source handoff; execution needs a separate
 explicit instruction.
+The later queued-array update includes focused local operational unit checks;
+these do not establish live Slurm or research runtime correctness. Its migration
+and verification scope is documented in [queued-slurm-arrays.md](queued-slurm-arrays.md).
 
 ## Operational inputs and policy
 
-`configs/workflow.yaml` is an operational version-1 declaration, separate from
+`configs/workflow.yaml` is an operational version-2 declaration, separate from
 RunConfig/scientific schema 4. `load_policy` strictly validates unknown fields,
 types, paths, resources, signals, environment, command names, continuation budget
 and reviewed restrictions. Planning does not choose unresolved science. The
 existing full research manifest must already contain approved seeds, split/
 normalization, batch handling, precision/backend and scheduler settings.
+Version 1 remains readable without migration or changes to its sealed bytes.
+The [queued-array guide](queued-slurm-arrays.md) describes the v2 contract,
+focused unit checks, site-change preservation and explicit post-quiescence migration.
 
 Supply an actual Slurm account, canonical absolute shared Linux paths for the
 fixed checkout, full manifest, persistent base, data/split, run metadata/output,
@@ -32,8 +38,10 @@ override is rejected at operational readiness. Historical sealed policies still
 validate as declarations. Relocation requires correctly paired data_root/split_file
 in each separate research input before manifest build, preserving prepared YAML.
 
-Defaults are unmeasured requests: eight CPUs, 32G memory, twelve hours, four
-allocations across the workflow and 600 seconds warning. Four loader workers and
+Defaults are unmeasured requests: eight CPUs, 32G memory, twelve hours, up to 40
+queued tasks with at most four running across the workflow, and 600 seconds warning.
+`resources.max_queued` controls wave size; `max_concurrent` controls the Slurm
+running throttle. Forty tasks render `--array=0-39%4`. Four loader workers and
 four native threads fit the CPU request; each worker uses one torch thread.
 Native BLAS/OpenMP pools are bounded and torch interop uses one thread. This is
 pool configuration, not a measured throughput or CPU-affinity claim. Operational
@@ -44,9 +52,11 @@ controller. These are configurable bounded policies, not extra training epochs.
 The published OSU dgxh policy was consulted on **2026-10-13**: two-day maximum
 wall time; eight GPUs, 224 CPUs and 2000 GB; combined allowances of 48 GPU-hours,
 1536 CPU-hours and 12000 GB-hours. They are published bounds, not verified account
-entitlements. `resource_budget` checks the full requested overlap of managed
-pending/running/uncertain allocations; four one-GPU twelve-hour requests already
-use all 48 GPU-hours. It also applies the tighter reviewed account/QOS bounds.
+entitlements. Version-2 `resource_budget` checks simultaneous overlap at the
+enforced throttle, including capacity reserved by pending/unknown work; four
+one-GPU twelve-hour requests use all 48 running requested GPU-hours. Forty queued
+tasks request 480 whole-wave GPU-hours, reported separately for cumulative quota
+review. It also applies tighter reviewed account/QOS running and submission bounds.
 See [OSU Slurm policy](https://it.engineering.oregonstate.edu/hpc/slurm-howto) and
 [cluster description](https://it.engineering.oregonstate.edu/hpc/about-cluster).
 
@@ -92,7 +102,13 @@ there is no automatic entitlement guess.
 Fill `effective_limits` with finite positive tighter bounds (`max_wall_hours`,
 `max_gpus`, `max_cpus`, `max_memory_gb`, `gpu_hours`, `cpu_hours`,
 `memory_gb_hours`, `max_allocations`) plus `inspection_report_path` and the actual
-file SHA-256. Fractional time/memory bounds are supported. Submission verifies the
+file SHA-256. In v2, `max_allocations` bounds running jobs. Additionally supply
+reviewed `max_submitted_tasks` (all pending plus running tasks), `max_array_size`
+and `max_array_tasks`. Queued task count is checked against all three. Submission
+also requires complete recorded MaxArraySize/SchedulerParameters evidence and
+checks the reviewed array caps against it, using the documented max_array_tasks
+default only when complete parameter evidence omits that option. Missing evidence
+is an error, not unlimited capacity. Fractional time/memory bounds are supported. Submission verifies the
 report digest, version-2 contract, exact query/field coverage, raw-output linkage,
 recomputed collection issues and account/QOS/partition linkage. Version-1 reports
 and unknown report versions cannot authorize new submissions: recollect version-2
@@ -126,14 +142,16 @@ there is no retraining to obtain missing results.
 
 Default planning order is eligible training in original global order, then
 eligible evaluation in original global order. Rendering greedily selects at most
-the shared cap; explicit `--work-id` selection can choose another eligible bounded
+the queued-wave cap (40 by default); explicit `--work-id` selection can choose another eligible bounded
 group. This allows evaluation of trained checkpoints while later training is
 pending, subject to the same authority and cap. Only one unresolved wave may
 exist, across both datasets and both lifecycles. No new wave is submitted until
 every prior allocation is conclusively terminal and its allocation lease is gone.
 Partial-wave completion never makes a free submission slot. Pending, configuring,
 running, suspended, completing, requeued and unfamiliar/uncertain states retain
-the wave's full reserved capacity. If later accounting loss/outside requeue makes multiple old
+the wave's full queued reservation and possible running throttle. Slurm fills free
+running slots from that wave automatically. No new wave is allowed merely because
+some elements have finished. If later accounting loss/outside requeue makes multiple old
 waves uncertain, the registry preserves every uncertainty and blocks all new waves;
 it does not discard observations to make the state fit its normal one-wave policy.
 The normal policy sacrifices throughput for auditable continuation and shared
@@ -153,7 +171,9 @@ timestamps and allocation metadata belong to actual execution provenance. Worker
 membership, source/software, policies, selectors and checkpoint bindings. Seeds,
 training fingerprints and scientific state never include operational fields.
 Source inventory v2 includes the checked-in workflow declaration. Existing work
-schema versions stay 1; historical pins without `launch_inputs` remain readable
+items/registry/outcomes stay version 1; v2 policies produce plan/bundle version 2
+and separate queued/running budget and reservation fields. Legacy v1 plans/bundles
+retain their original policy-specific shape/semantics. Historical pins without `launch_inputs` remain readable
 for ownership/reconciliation but cannot render, submit or execute under this source.
 New work must be replanned after any uncertain old intent is resolved; existing
 bundle bytes/registry history are never rewritten. This source change cannot
@@ -375,7 +395,7 @@ Submission uncertainty/controller/configuration errors exit 22 and reserve capac
 No supported submission command cancels, steals, or automatically requeues jobs.
 
 Step 8/final integration consume `OperationalPolicy`, `resource_budget`, sealed
-version-1 work plans and wave index mappings, `WorkflowLease` registry snapshots,
+version-1/2 work plans and wave index mappings, version-1 `WorkflowLease` registry snapshots,
 exact scheduler observations, version-1 allocation outcomes (mapping/claim/scheduler
 IDs, task outcome, exit, safe interruption, stop policy, actual provenance and
 diagnostic), plus the existing full training/evaluation scientific coverage and

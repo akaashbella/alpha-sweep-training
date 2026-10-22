@@ -24,12 +24,13 @@ recipe is implied. Parallel task execution must not change the scientific run.
 | Host RAM per task | 32 GB |
 | Wall time per allocation | 12 hours |
 | Concurrent tasks across the workflow | Up to 4 |
+| Queued tasks in one wave | Up to 40, with a separate running throttle of 4 |
 | Advance warning | 600 seconds, discard by default |
 | Account | Explicitly supplied for the actual allocation; unresolved |
 
 These are planning defaults, not measured requirements or guaranteed account
 entitlements. Account, CPU/RAM requests, wall time, and concurrency are
-configured in separate version-1 `configs/workflow.yaml` and applied as typed
+configured in separate version-2 `configs/workflow.yaml` (legacy v1 remains readable) and applied as typed
 execution-only overrides; one GPU and `dgxh` express this main workflow's
 fixed execution design. Do not claim currently available cluster/account limits
 without verifying them during the future authorized operational phase.
@@ -51,7 +52,10 @@ count-200 continuation only reconciles training completion; robustness has its
 own allocations/slot resumption and never restores training optimizer/RNG state.
 
 Step 7 uses one persistent **workflow-wide** registry/controller and at most one
-unresolved bounded wave across both datasets and lifecycles. Never independently
+unresolved bounded wave across both datasets and lifecycles. A v2 wave can queue
+40 tasks while its `--array=0-39%4` throttle enforces at most four running tasks.
+Validate queued count against reviewed submit/array limits and simultaneous
+resources/requested time against the throttle. Never independently
 give each array four slots. Immutable array mappings and shared status ensure
 CIFAR-10 is processed first, followed by CIFAR-100. Submission/requeue logic must
 also cooperate with per-storage-root run locks, validate aggregate requested
@@ -105,7 +109,9 @@ OSU's [published dgxh policy](https://it.engineering.oregonstate.edu/hpc/slurm-h
 consulted 2026-10-13, caps aggregate GPU-time at 48 GPU-hours; four one-GPU twelve-hour
 requests consume that allowance. Unknown submissions/scheduler state retain the
 entire wave's reservation. Training ordering is CIFAR-10 first; pending evaluation
-does not block otherwise eligible CIFAR-100 training. See the
+does not block otherwise eligible CIFAR-100 training. Policy migration, separate
+running/queued budgets, legacy compatibility and preserving the active private HPC
+checkout are described in [queued-slurm-arrays.md](queued-slurm-arrays.md). See the
 [end-to-end operating guide](operating-guide.md) for the twelve-step future sequence,
 launch pinning, recovery tables and unresolved capability/verification inputs.
 All nine steps are complete in source only. A separate explicit instruction is

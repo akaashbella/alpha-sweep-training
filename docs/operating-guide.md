@@ -188,6 +188,11 @@ site enforcement explicitly, without automatic entitlement guesses.
 Fill `effective_limits` with reviewed finite positive bounds for wall hours,
 GPU/CPU/memory overlap, GPU/CPU/memory hours and `max_allocations`, plus the report
 path and **actual file SHA-256** (distinct from its internal document seal).
+For policy v2, review `max_allocations` as the running-job allowance and add
+`max_submitted_tasks`, `max_array_size` and `max_array_tasks`. The 40 queued
+elements must fit submission/array limits; four simultaneous elements must fit
+running/resource-time bounds. Raw configuration evidence must establish the
+cluster array caps. See [queued-slurm-arrays.md](queued-slurm-arrays.md).
 The submission gate revalidates report bytes, version, query coverage, raw rows,
 collection issues and account/QOS linkage. Review the dated published bounds
 against current OSU policy; they are not verified current entitlements.
@@ -215,10 +220,13 @@ alpha-sweep-workflow submit --manifest "$FULL_MANIFEST" --policy "$POLICY" \
 ```
 
 Every supported submission uses the same registry/controller and durable intent
-before `sbatch`. Keep one unresolved wave and the shared four-allocation planning
-cap across datasets/lifecycles. Defaults (one GPU, eight CPUs, 32 GB, 12 hours)
-are unmeasured requests; four such requests consume 48 requested GPU-hours.
-Pending/unknown allocations reserve their full capacity. Never submit the rendered
+before `sbatch`. Keep one unresolved wave, up to 40 queued tasks and a shared
+four-running-task throttle across datasets/lifecycles. A full wave renders
+`--array=0-39%4`, so Slurm fills openings from queued elements. Defaults (one GPU,
+eight CPUs, 32 GB, 12 hours) are unmeasured requests; four simultaneous tasks
+reserve 48 running requested GPU-hours, while the whole wave requests 480 GPU-hours
+for separate cumulative-usage review. Pending/unknown work retains its queued
+reservation and possible running throttle. Never submit the rendered
 script manually, create a second registry, or use an independent array/requeue
 script. There are no supported legacy submission scripts in this checkout.
 
@@ -481,6 +489,15 @@ availability or readiness to train. Generic declaration validity still applies.
    cannot render, submit or run under current source. No recovery lease can reserve
    or submit new work. Unfinished-training source/software equality and independent
    evaluation compatibility remain unchanged; adoption is not a migration permit.
+
+For migration from four-task waves to policy v2, use the explicit
+[queued-array transfer/migration procedure](queued-slurm-arrays.md#safe-transfer-and-explicit-migration-on-hpc).
+It preserves the private HPC email/squeue/SubmitLine changes in a separate staging
+checkout, retains the active frozen source and all historical bundles/snapshots,
+and requires authoritative quiescence before policy adoption. Unfinished training
+must still use its original source/software; terminal allocation state alone does
+not waive that compatibility gate. The focused operational unit checks authorized
+for this later update do not constitute research/HPC runtime verification.
 
 ## Unresolved-input register
 

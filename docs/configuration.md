@@ -1,6 +1,9 @@
 # Configuration, identity, and artifact ownership
 
-Step 7 adds separate operational policy version 1 in `configs/workflow.yaml`,
+Operational policy version 2 in `configs/workflow.yaml` separates queued wave
+size from running concurrency; version 1 is read unchanged for existing waves.
+The [queued-array guide](queued-slurm-arrays.md) defines the reviewed running,
+submission and array bounds and explicit migration after quiescence. It is
 validated by hpc_policy.py. It does not alter this scientific schema/fingerprint.
 Resources/environment/shared paths/signals/continuation and reviewed account/QOS
 evidence are archived in immutable work mappings and workflow state. Typed

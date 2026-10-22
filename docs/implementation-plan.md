@@ -1,5 +1,12 @@
 # Shared contracts and completed source implementation
 
+The later [queued-array operational update](queued-slurm-arrays.md) adds policy/
+plan/bundle v2 for 40 queued tasks with a separate running throttle of four, keeps
+legacy v1 wave authority readable, and includes focused operational unit checks.
+It does not change the scientific contracts or authorize HPC execution; private
+site changes and frozen unfinished-training compatibility must be preserved during
+the documented separate transfer/adoption procedure.
+
 Steps 1–9 implement configuration, identity, finite atomic serialization,
 provenance validation, guarded run initialization, full official CIFAR preparation,
 reproducible loaders, all four scratch CIFAR models, owned eligible-weight
