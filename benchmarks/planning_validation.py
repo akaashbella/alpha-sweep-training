@@ -2,15 +2,14 @@
 
 Run with src on PYTHONPATH: python -B benchmarks/planning_validation.py
 All temporary bytes are synthetic and removed. No torch, datasets or scheduler.
-Reports validation reads separately from filesystem-cache/physical I/O; Windows
-conservatively hashes snapshots and cannot measure POSIX stat-only I/O savings.
+Reports validator, fingerprint and probe reads separately from physical I/O.
+Compares whole-scope hashing against dependency tracking on every platform.
 """
 
 import argparse
 from dataclasses import asdict
 import hashlib
 import json
-import os
 from pathlib import Path
 import platform
 import sys
@@ -19,7 +18,7 @@ from time import perf_counter
 from types import SimpleNamespace
 
 from alpha_sweep_training import metrics
-from alpha_sweep_training.planning_inspection import PlanningInspection
+from alpha_sweep_training.planning_inspection import PlanningInspection, record_dependency
 
 
 def legacy_layers(context, record, statistics, *, include_header):
@@ -68,7 +67,7 @@ def csv_benchmark(args):
 
 def read_benchmark(args, *, reconstruct_csv=False):
     with tempfile.TemporaryDirectory(prefix="alpha-planning-benchmark-") as temp:
-        roots, expected = [], {}
+        roots, expected, selected = [], {}, {}
         block = b"synthetic-checkpoint-bytes-only\n"
         payload = (block * (args.checkpoint_bytes // len(block) + 1))[:args.checkpoint_bytes]
         print("Benchmark: creating temporary synthetic read workload", file=sys.stderr, flush=True)
@@ -76,17 +75,27 @@ def read_benchmark(args, *, reconstruct_csv=False):
             root = Path(temp) / str(task)
             root.mkdir()
             roots.append(root)
+            selected[root] = []
             for role in ("latest", "best", "final"):
                 path = root / f"{role}.bin"
                 path.write_bytes(payload)
                 expected[path] = hashlib.sha256(payload).hexdigest()
+                selected[root].append(path)
             for epoch in range(args.epochs):
                 path = root / f"epoch-{epoch}.json"
                 value = json.dumps({"synthetic_epoch": epoch, "synthetic_identity": "not research data"}).encode()
                 path.write_bytes(value)
                 expected[path] = hashlib.sha256(value).hexdigest()
+                selected[root].append(path)
+            history = root / "unreferenced-history"
+            history.mkdir()
+            for index in range(args.history_files):
+                (history / f"old-{index}.bin").write_bytes(payload)
+        relevant_bytes = sum(path.stat().st_size for paths in selected.values() for path in paths)
+        history_bytes = args.tasks * args.history_files * args.checkpoint_bytes
 
-        def run(cached):
+        def run(mode):
+            cached, tracked = mode != "uncached", mode == "tracked"
             cache = PlanningInspection()
             counters = {"validations": 0, "validator_read_bytes": 0, "csv_reconstructions": 0}
             context, statistics = csv_inputs(args)
@@ -95,11 +104,13 @@ def read_benchmark(args, *, reconstruct_csv=False):
             def validate(root):
                 counters["validations"] += 1
                 digest = hashlib.sha256()
-                for path in sorted(root.iterdir()):
+                for path in sorted(selected[root]):
                     raw = path.read_bytes()
                     counters["validator_read_bytes"] += len(raw)
-                    if hashlib.sha256(raw).hexdigest() != expected[path]:
+                    value = hashlib.sha256(raw).hexdigest()
+                    if value != expected[path]:
                         raise AssertionError("Synthetic artifact digest mismatch")
+                    record_dependency(path, value)
                     if path.suffix == ".json":
                         json.loads(raw)
                     digest.update(raw)
@@ -113,26 +124,38 @@ def read_benchmark(args, *, reconstruct_csv=False):
             start = perf_counter()
             results = []
             for index in range(args.passes):
-                print(f"Benchmark: {'cached' if cached else 'baseline'} pass {index + 1}/{args.passes}, "
+                print(f"Benchmark: {mode} pass {index + 1}/{args.passes}, "
                       f"CSV reconstruction={reconstruct_csv}", file=sys.stderr, flush=True)
                 values = []
                 for root in roots:
-                    values.append(cache.reuse(str(root), (root,), lambda: validate(root)) if cached else validate(root))
+                    values.append(cache.reuse(str(root), (root,), lambda: validate(root),
+                                              track_dependencies=tracked) if cached else validate(root))
                 results.append(values)
             if cached:
                 cache.assert_unchanged()
-            return {**counters, "seconds": perf_counter() - start, "cache_hits": cache.hits}, results
+            expected_fingerprints = ((args.passes + 1) * relevant_bytes if tracked else
+                                     (args.passes + 2) * (relevant_bytes + history_bytes) if cached else 0)
+            if cache.read_metrics["fingerprint_read_bytes"] != expected_fingerprints:
+                raise AssertionError("Fingerprint read accounting differs from the synthetic dependency graph")
+            return {**counters, **cache.read_metrics, "seconds": perf_counter() - start,
+                    "cache_hits": cache.hits,
+                    "unreferenced_history_hash_bytes": (args.passes + 2) * history_bytes if mode == "whole_scope" else 0,
+                    "total_instrumented_read_bytes": counters["validator_read_bytes"]
+                        + cache.read_metrics["fingerprint_read_bytes"]
+                        + cache.read_metrics["dependency_probe_read_bytes"]}, results
 
         print("Benchmark: repeated uncached deep reads", file=sys.stderr, flush=True)
-        before, before_values = run(False)
-        print("Benchmark: operation-local reuse plus final freshness guard", file=sys.stderr, flush=True)
-        after, after_values = run(True)
-        if before_values != after_values:
+        before, before_values = run("uncached")
+        print("Benchmark: conservative whole-scope content fallback", file=sys.stderr, flush=True)
+        fallback, fallback_values = run("whole_scope")
+        print("Benchmark: dependency-tracked content checks plus final guard", file=sys.stderr, flush=True)
+        after, after_values = run("tracked")
+        if before_values != after_values or before_values != fallback_values:
             raise AssertionError("Read observation equivalence failed")
-        return {"baseline": before, "optimized": after,
+        return {"baseline": before, "whole_scope_fallback": fallback, "optimized": after,
                 "speedup": before["seconds"] / after["seconds"],
-                "windows_snapshot_content_hash_fallback": os.name == "nt",
-                "read_bytes_scope": "Deep validator only; excludes snapshot fallback reads, OS cache and physical I/O"}
+                "relevant_dependency_bytes": relevant_bytes, "unreferenced_history_bytes": history_bytes,
+                "read_bytes_scope": "Validator plus measured content fingerprint/probe reads; excludes physical I/O/cache misses"}
 
 
 def main():
@@ -143,6 +166,7 @@ def main():
     parser.add_argument("--tasks", type=int, default=8)
     parser.add_argument("--passes", type=int, default=5)
     parser.add_argument("--checkpoint-bytes", type=int, default=2 * 1024 * 1024)
+    parser.add_argument("--history-files", type=int, default=12)
     args = parser.parse_args()
     if any(value < 1 for value in vars(args).values()):
         parser.error("All workload sizes must be positive")

@@ -106,7 +106,7 @@ def read_committed(paths: RunPaths, config, provenance, *, verify_previous: bool
     if inspection is None:
         return validate()
     key = ("committed", strict_json_text(config.to_dict()), strict_json_text(provenance), verify_previous)
-    return inspection.reuse(key, training_paths(paths), validate)
+    return inspection.reuse(key, training_paths(paths), validate, track_dependencies=True)
 
 
 def _read_committed(paths: RunPaths, config, provenance, *, verify_previous: bool = True,
@@ -159,7 +159,7 @@ def validate_committed_document(paths, head, ref, document, config, provenance, 
                 path = relative_file(paths.checkpoints, checkpoint.relative_path)
                 key = ("checkpoint", checkpoint, strict_json_text(config.to_dict()), compatibility_key(provenance))
                 payloads[role] = checkpoint_cache.reuse(key, (path,),
-                    lambda: read_checkpoint(paths, checkpoint, config, provenance))
+                    lambda: read_checkpoint(paths, checkpoint, config, provenance), track_dependencies=True)
             if checkpoint.relative_path != f"generations/{payloads[role]['metadata']['generation']}.{role}.pt":
                 fail("Role checkpoint reference is not its immutable generation")
     latest = payloads["latest"]

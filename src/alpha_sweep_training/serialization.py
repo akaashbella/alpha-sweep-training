@@ -52,8 +52,13 @@ def read_json(path: str | Path) -> Any:
             result[key] = value
         return result
 
-    with Path(path).open("r", encoding="utf-8") as stream:
-        value = json.load(stream, parse_constant=invalid_constant, object_pairs_hook=unique_object)
+    # Bind planning dependencies to the exact bytes parsed, including CRLF;
+    # explicit UTF-8 decoding retains the existing encoding/strict JSON contract.
+    with Path(path).open("rb") as stream:
+        content = stream.read()
+    from .planning_inspection import record_dependency
+    record_dependency(path, content=content)
+    value = json.loads(content.decode("utf-8"), parse_constant=invalid_constant, object_pairs_hook=unique_object)
     # Also catches otherwise valid JSON such as 1e999 that overflows a Python float.
     strict_json_text(value)
     return value

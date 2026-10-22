@@ -82,7 +82,7 @@ def inspect_task(task: Task, *, base_dir, overrides=None, provenance=None) -> Ta
     key = ("observation", task.run_id, strict_json_text(task.prepared_data),
            strict_json_text(config.to_dict()), compatibility_key(provenance))
     return inspection.reuse(key, training_paths(paths), lambda: _inspect_task(
-        task, base_dir=base_dir, overrides=overrides, provenance=provenance))
+        task, base_dir=base_dir, overrides=overrides, provenance=provenance), track_dependencies=True)
 
 
 def _inspect_task(task: Task, *, base_dir, overrides=None, provenance=None) -> TaskObservation:

@@ -1,6 +1,6 @@
 """Focused pure-CPU serialization/read-reuse checks; no research execution."""
 
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from copy import deepcopy
 from dataclasses import asdict
 import hashlib
@@ -17,6 +17,7 @@ from alpha_sweep_training import metrics
 from alpha_sweep_training.planning_inspection import (
     InspectionChanged, PlanningInspection, active_inspection, compatibility_key,
     evidence_stamp, stderr_progress, training_paths,
+    record_dependency,
 )
 
 
@@ -49,7 +50,47 @@ def provenance_fixture(source="0" * 64):
         "torchvision": "synthetic", "cuda": None, "cudnn": None}, "allocation": {}}
 
 
+@contextmanager
+def frozen_metadata(path):
+    """Freeze target/ancestors in stat AND lstat, independent of pathlib internals."""
+    saved = {candidate: candidate.lstat() for candidate in (path, *path.parents)}
+    real_stat, real_lstat = Path.stat, Path.lstat
+
+    def unchanged_stat(candidate, *args, **kwargs):
+        return saved[candidate] if candidate in saved else real_stat(candidate, *args, **kwargs)
+
+    def unchanged_lstat(candidate, *args, **kwargs):
+        return saved[candidate] if candidate in saved else real_lstat(candidate, *args, **kwargs)
+
+    with patch.object(Path, "stat", unchanged_stat), patch.object(Path, "lstat", unchanged_lstat):
+        yield saved[path]
+
+
 class SerializationChecks(unittest.TestCase):
+    def test_json_reader_binds_exact_utf8_crlf_bytes_without_probe_reread(self):
+        from alpha_sweep_training.serialization import read_json
+        with tempfile.TemporaryDirectory(prefix="alpha-json-unit-") as temporary:
+            path = Path(temporary) / "record.json"
+            content = '{\r\n"value":"\u03b1"\r\n}\r\n'.encode("utf-8")
+            path.write_bytes(content)
+            cache = PlanningInspection()
+            value = cache.reuse("json", (path,), lambda: read_json(path), track_dependencies=True)
+            self.assertEqual(value, {"value": "\u03b1"})
+            self.assertEqual(cache.read_metrics["fingerprint_read_bytes"], len(content))
+            self.assertEqual(cache.read_metrics["dependency_probe_read_bytes"], 0)
+            cache.assert_unchanged()
+
+    def test_json_reader_retains_duplicate_nonfinite_and_encoding_rejection(self):
+        from alpha_sweep_training.serialization import read_json
+        with tempfile.TemporaryDirectory(prefix="alpha-json-unit-") as temporary:
+            path = Path(temporary) / "record.json"
+            for content in (b'{"a":0,"a":1}', b'{"a":NaN}', b'{"a":1e999}',
+                            b'\xef\xbb\xbf{}', '{}'.encode("utf-16")):
+                with self.subTest(content=content):
+                    path.write_bytes(content)
+                    with self.assertRaises(ValueError):
+                        read_json(path)
+
     def test_exact_csv_bytes_and_one_identity_serialization_per_context(self):
         for count in (1, 8, 64):
             for header in (False, True):
@@ -117,9 +158,7 @@ class InspectionChecks(unittest.TestCase):
 
     def test_artifact_edits_replacement_and_deletion_invalidate(self):
         self.read()
-        # Filesystem timestamps must visibly advance even on coarse local clocks.
         self.file.write_bytes(b"modified payload")
-        os.utime(self.file, ns=(1_500_000_000_000_000_000, 1_500_000_000_000_000_000))
         with self.assertRaises(InspectionChanged):
             self.cache.assert_unchanged()
         second = self.read()
@@ -170,6 +209,123 @@ class InspectionChecks(unittest.TestCase):
             self.cache.assert_unchanged()
         self.read()
         self.assertEqual(self.calls, 2)
+
+    def test_changed_bytes_with_identical_stat_metadata_invalidates(self):
+        # Deterministic on every OS/filesystem: all exposed stat fields for the
+        # dependency remain identical. No sleep or timestamp-resolution premise.
+        for tracked in (False, True):
+            with self.subTest(tracked=tracked):
+                self.file.write_bytes(b"original")
+                self.cache = PlanningInspection()
+                def read():
+                    return self.cache.reuse("authority", self.paths,
+                        self.tracked_validate if tracked else self.validate, track_dependencies=tracked)
+
+                before_calls = self.calls
+                with frozen_metadata(self.file) as saved:
+                    metadata_before = evidence_stamp(self.paths, content_paths=())
+                    read()
+                    self.cache.assert_unchanged()
+                    self.file.write_bytes(b"modified")
+                    self.assertEqual(self.file.stat(), saved)
+                    self.assertEqual(self.file.lstat(), saved)
+                    self.assertEqual(metadata_before, evidence_stamp(self.paths, content_paths=()))
+                    with self.assertRaises(InspectionChanged):
+                        self.cache.assert_unchanged()
+                    self.assertEqual(read(), hashlib.sha256(b"modified").hexdigest())
+                self.assertEqual(self.calls - before_calls, 2)
+
+    def tracked_validate(self):
+        value = self.validate()
+        record_dependency(self.file, value)
+        return value
+
+    def test_tracked_dependencies_exclude_unused_history_and_count_reads(self):
+        history = self.root / "unreferenced-history.bin"
+        history.write_bytes(b"h" * (1024 * 1024))
+        read = lambda: self.cache.reuse("tracked", self.paths, self.tracked_validate, track_dependencies=True)
+        with frozen_metadata(history):
+            first = read()
+            history.write_bytes(b"H" * (1024 * 1024))
+            self.assertEqual(first, read())
+            self.cache.assert_unchanged()
+        self.assertEqual(self.calls, 1)
+        # One after-validation hash, one hit hash, one final hash. The 1 MiB
+        # history was enumerated but never content-read for these observations.
+        self.assertEqual(self.cache.read_metrics["fingerprint_read_bytes"], 3 * len(b"original"))
+        self.assertEqual(self.cache.read_metrics["fingerprint_files_hashed"], 3)
+
+    def test_tracked_mutation_during_validation_with_frozen_stat_is_rejected(self):
+        def changing():
+            value = self.tracked_validate()
+            self.file.write_bytes(b"modified")
+            return value
+
+        with frozen_metadata(self.file):
+            with self.assertRaises(InspectionChanged):
+                self.cache.reuse("tracked", self.paths, changing, track_dependencies=True)
+            result = self.cache.reuse("tracked", self.paths, self.tracked_validate, track_dependencies=True)
+        self.assertEqual(result, hashlib.sha256(b"modified").hexdigest())
+        self.assertEqual(self.calls, 2)
+
+    def test_nested_cache_hit_propagates_dependency_and_final_guard_deduplicates(self):
+        inner = PlanningInspection()
+        read_inner = lambda: inner.reuse("inner", self.paths, self.tracked_validate, track_dependencies=True)
+        read_inner()
+        self.cache.reuse("outer", self.paths, read_inner, track_dependencies=True)
+        # A second entry references the same file. The final guard must hash it
+        # once, not once per observation/journal/cache key.
+        self.cache.reuse("another", self.paths, read_inner, track_dependencies=True)
+        before = self.cache.read_metrics["fingerprint_read_bytes"]
+        self.cache.assert_unchanged()
+        self.assertEqual(self.cache.read_metrics["fingerprint_read_bytes"] - before, len(b"original"))
+        self.assertEqual(self.calls, 1)
+        self.file.write_bytes(b"modified")
+        with self.assertRaises(InspectionChanged):
+            self.cache.assert_unchanged()
+
+    def test_tracked_json_reader_invalidates_under_frozen_stat(self):
+        from alpha_sweep_training.serialization import read_json
+        record = self.root / "epoch.json"
+        record.write_bytes(b'{"value":0}')
+        with frozen_metadata(record):
+            first = self.cache.reuse("json", self.paths, lambda: read_json(record), track_dependencies=True)
+            self.assertEqual(first, {"value": 0})
+            record.write_bytes(b'{"value":1}')
+            with self.assertRaises(InspectionChanged):
+                self.cache.assert_unchanged()
+            self.assertEqual(self.cache.reuse("json", self.paths, lambda: read_json(record),
+                                             track_dependencies=True), {"value": 1})
+
+    def test_new_membership_invalidates_even_when_directory_stat_is_frozen(self):
+        with frozen_metadata(self.root):
+            self.cache.reuse("tracked", self.paths, self.tracked_validate, track_dependencies=True)
+            (self.root / "new-failure.json").write_bytes(b'{}')
+            with self.assertRaises(InspectionChanged):
+                self.cache.assert_unchanged()
+
+    def test_unregistered_json_control_is_always_hashed(self):
+        owner = self.root / ".run_owner.json"
+        owner.write_bytes(b'{"owner":0}')
+        with frozen_metadata(owner):
+            self.cache.reuse("tracked", self.paths, self.tracked_validate, track_dependencies=True)
+            owner.write_bytes(b'{"owner":1}')
+            with self.assertRaises(InspectionChanged):
+                self.cache.assert_unchanged()
+
+    def test_conflicting_reads_or_escaped_dependencies_never_enter_cache(self):
+        def changing():
+            self.tracked_validate()
+            self.file.write_bytes(b"modified")
+            self.tracked_validate()
+
+        with self.assertRaises(InspectionChanged):
+            self.cache.reuse("tracked", self.paths, changing, track_dependencies=True)
+        outside = self.root.parent / "outside.bin"
+        outside.write_bytes(b"outside")
+        with self.assertRaises(InspectionChanged):
+            self.cache.reuse("tracked", self.paths,
+                lambda: record_dependency(outside, hashlib.sha256(b"outside").hexdigest()), track_dependencies=True)
 
     def test_missing_becomes_present(self):
         missing = self.root / "absent"

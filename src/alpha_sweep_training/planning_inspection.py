@@ -1,17 +1,15 @@
 """Operation-local read reuse, never persistent scientific authority.
 
-Only fully validated, stable reads enter the cache. Every reuse checks all files,
-directories, ancestor identities and ownership locks again. Operation-wide entries
-are tensor-free; temporary checkpoint caches are discarded after each deep read.
-Requires coherent filesystem stat/change-time observations, as do immutable-file
-publication and the existing read-only observation contract; this is not a lease.
+Every reuse checks content, directory membership, ancestor identities and locks.
+Timestamps are change hints, never proof of unchanged content. Instrumented readers
+track validated dependencies; other readers conservatively hash their whole scope.
+Operation-wide entries are tensor-free. This is not a reader lease/grid snapshot.
 """
 
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
 import hashlib
-import os
 import stat
 import sys
 
@@ -21,6 +19,48 @@ class InspectionChanged(RuntimeError):
 
 
 _ACTIVE = ContextVar("planning_inspection", default=None)
+_READS = ContextVar("planning_dependency_reads", default=None)
+_CONTROLS = {"HEAD.json", "SWEEP_HEAD.json", "run_metadata.json", "resolved_config.yaml",
+             ".run_owner.json", "owner.json"}
+
+
+def _control(path):
+    return path.name in _CONTROLS or path.name.endswith(".lock")
+
+
+def _content_digest(path, metrics, prefix="fingerprint"):
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
+        raise InspectionChanged(f"Missing/plain-file dependency required: {path}")
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+            if metrics is not None:
+                metrics[f"{prefix}_read_bytes"] += len(block)
+    if metrics is not None:
+        metrics[f"{prefix}_files_hashed"] += 1
+    return digest.hexdigest()
+
+
+def record_dependency(path, digest=None, *, content=None):
+    """Bind a validated read to its bytes; a supplied digest must be from that read.
+
+    Outside cache validation this is a no-op. Existing hash readers supply their
+    digest or exact bytes without another read. Other readers take a conservative probe.
+    Nested cache hits propagate their freshly checked dependencies to the caller.
+    """
+    reads = _READS.get()
+    if reads is None:
+        return
+    dependencies, metrics = reads
+    path = Path(path).absolute()
+    if digest is None:
+        digest = (hashlib.sha256(content).hexdigest() if content is not None
+                  else _content_digest(path, metrics, "dependency_probe"))
+    if path in dependencies and dependencies[path] != digest:
+        raise InspectionChanged(f"Dependency changed between validated reads: {path}")
+    dependencies[path] = digest
 
 
 def active_inspection():
@@ -47,16 +87,17 @@ def training_paths(paths):
     return (*roots, *(root.parent / f".{root.name}.lock" for root in roots))
 
 
-def evidence_stamp(paths):
-    """Metadata change detectors for already content-validated immutable files.
+def evidence_stamp(paths, *, content_paths=None, digests=None, metrics=None):
+    """Content proof plus structural evidence, independent of timestamp precision.
 
-    Include ctime so an in-place edit with restored mtime/size invalidates reuse;
-    include device/inode for replacements, reparse flags for Windows links, all
-    descendants for uncommitted failure evidence, and parents for redirected roots.
-    Missing evidence is a token, never a successful validation or an entitlement.
-    Symlinks/junctions are recorded without following them.
+    Default: hash every regular file. Tracked callers pass their validated read set
+    instead, so unrelated checkpoint history receives structure/type checks only.
+    Control/ownership files are always hashed. Child/ancestor links are not followed.
+    A digest map may be shared within one final guard, never across reuse checks.
     """
     rows = []
+    content_paths = None if content_paths is None else set(content_paths)
+    digests = {} if digests is None else digests
 
     def visit(path, descend):
         try:
@@ -68,18 +109,12 @@ def evidence_stamp(paths):
         linked = stat.S_ISLNK(info.st_mode) or bool(attributes & 0x400)
         identity = (info.st_dev, info.st_ino, info.st_mode, attributes)
         token = (*identity, info.st_size, info.st_mtime_ns, info.st_ctime_ns) if descend else identity
-        # Windows ctime is creation time on supported Python versions, not a
-        # reliable content-change time. Conservatively hash there; production
-        # POSIX Slurm storage uses stat change-time and avoids these rereads.
-        authority = path.name in {"HEAD.json", "SWEEP_HEAD.json", "run_metadata.json",
-                                 "resolved_config.yaml", ".run_owner.json", "owner.json"} or path.name.endswith(".lock")
-        if descend and (os.name == "nt" or authority) and stat.S_ISREG(info.st_mode) and not linked:
-            with path.open("rb") as stream:
-                digest = hashlib.sha256()
-                for block in iter(lambda: stream.read(1024 * 1024), b""):
-                    digest.update(block)
-            token = (*token, digest.hexdigest())
         rows.append((str(path), token))
+        if (descend and stat.S_ISREG(info.st_mode) and not linked
+                and (content_paths is None or path in content_paths or _control(path))):
+            if path not in digests:
+                digests[path] = _content_digest(path, metrics)
+            rows.append((str(path), "content", digests[path]))
         if descend and stat.S_ISDIR(info.st_mode) and not linked:
             for child in sorted(path.iterdir()):
                 visit(child, True)
@@ -98,6 +133,14 @@ def evidence_stamp(paths):
     return tuple(rows)
 
 
+def _contents(stamp):
+    return {Path(row[0]): row[2] for row in stamp if len(row) == 3 and row[1] == "content"}
+
+
+def _structure_and_controls(stamp):
+    return tuple(row for row in stamp if len(row) != 3 or _control(Path(row[0])))
+
+
 def stderr_progress(message):
     print(f"[workflow] {message}", file=sys.stderr, flush=True)
 
@@ -110,6 +153,8 @@ class PlanningInspection:
         self._entries = {}
         self.hits = 0
         self.validations = 0
+        self.read_metrics = {"fingerprint_read_bytes": 0, "fingerprint_files_hashed": 0,
+                             "dependency_probe_read_bytes": 0, "dependency_probe_files_hashed": 0}
 
     @contextmanager
     def activate(self):
@@ -119,27 +164,52 @@ class PlanningInspection:
         finally:
             _ACTIVE.reset(token)
 
-    def reuse(self, key, paths, validate):
-        paths = tuple(paths)
-        before = evidence_stamp(paths)
+    def reuse(self, key, paths, validate, *, track_dependencies=False):
+        """Tracking is opt-in only for validators whose content readers register reads.
+
+        Otherwise hash all files conservatively. Neither mode trusts unchanged stat
+        values. A fresh content/structure proof brackets the successful validation.
+        """
+        paths = tuple(Path(path).absolute() for path in paths)
         entry = self._entries.get(key)
-        if entry is not None and entry[0] == paths and entry[1] == before:
+        scope = entry[3] if entry is not None and track_dependencies else (() if track_dependencies else None)
+        before = evidence_stamp(paths, content_paths=scope, metrics=self.read_metrics)
+        if entry is not None and entry[0] == paths and entry[4] == track_dependencies and entry[1] == before:
             self.hits += 1
+            for path, digest in entry[3].items():
+                record_dependency(path, digest)
             return entry[2]
         # Drop old authority even if its replacement fails validation.
         self._entries.pop(key, None)
         self.validations += 1
-        result = validate()
-        if before != evidence_stamp(paths):
+        dependencies = {}
+        token = _READS.set((dependencies, self.read_metrics))
+        try:
+            result = validate()
+        finally:
+            _READS.reset(token)
+        if any(not any(path == root or root in path.parents for root in paths) for path in dependencies):
+            raise InspectionChanged("Validated dependency escaped the declared observation scope; expand scope before reuse")
+        after = evidence_stamp(paths, content_paths=dependencies if track_dependencies else None,
+                               metrics=self.read_metrics)
+        contents = _contents(after)
+        stable = (_structure_and_controls(before) == _structure_and_controls(after)
+                  if track_dependencies else before == after)
+        if not stable or any(contents.get(path) != digest for path, digest in dependencies.items()):
             raise InspectionChanged("Authority/artifacts/ownership changed during validation; replan after writers exit")
-        self._entries[key] = (paths, before, result)
+        self._entries[key] = (paths, after, result, contents, track_dependencies)
+        for path, digest in contents.items():
+            record_dependency(path, digest)
         return result
 
     def assert_unchanged(self):
         """Fresh final guard immediately before reserving a submission intent."""
         stamps = {}
-        for paths, expected, _ in self._entries.values():
-            if paths not in stamps:
-                stamps[paths] = evidence_stamp(paths)
-            if stamps[paths] != expected:
+        digests = {}  # One fresh read per shared dependency in this guard only.
+        for paths, expected, _, dependencies, tracked in self._entries.values():
+            key = (paths, frozenset(dependencies) if tracked else None)
+            if key not in stamps:
+                stamps[key] = evidence_stamp(paths, content_paths=dependencies if tracked else None,
+                                             digests=digests, metrics=self.read_metrics)
+            if stamps[key] != expected:
                 raise InspectionChanged("Planning evidence changed before submission intent; replan (no submission reserved)")

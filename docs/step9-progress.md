@@ -1,5 +1,47 @@
 # Step 9 final source integration
 
+## HPC cache invalidation correction after dcddd03
+
+The reported HPC run passed 24 cases but failed the restored-mtime invalidation
+test. POSIX size/mtime/ctime therefore cannot establish unchanged content. The
+[corrected evidence contract, measurements and exact HPC update procedure](planning-validation-performance.md)
+replace that assumption with content-based invalidation on every platform.
+
+Generic cache readers conservatively hash their declared scope. Instrumented
+observation/journal/checkpoint/evaluation readers track the exact validated byte
+dependencies, including nested-cache propagation. Reuse and the unchanged final
+pre-intent guard rehash them; the final guard deduplicates shared files. HEAD,
+ownership, config and locks always receive content checks; directory/type evidence
+still detects new failure records and links. Unreferenced checkpoint payloads are
+enumerated without repeated content reads. JSON dependency binding uses the exact
+UTF-8 bytes parsed, retaining strict rejection and CRLF handling. CSV optimization,
+scientific contracts, checkpoint authority, source compatibility, 40/4 arrays,
+policy/registry formats and private HPC patches are preserved.
+
+Local focused discovery: 35 cases, 34 passed, one existing real-symlink case skipped
+for Windows privileges. The original restored-mtime test and deterministic tests
+freezing both stat/lstat passed without sleeps, skip conditions or forced timestamp
+differences. Tests also cover dependency graphs, nested hits, content-read counts,
+deduplicated final checks, frozen-directory membership and exact JSON bytes.
+
+The synthetic benchmark measured 100,875,936 fingerprint bytes for dependency
+tracking versus 629,411,400 for whole-scope fallback, with zero unused-history
+content reads. Total validator/fingerprint reads were 126,094,920 versus 654,630,384.
+This exceeds the cheap uncached reader's 75,656,952 bytes; reliable content evidence
+has I/O cost. Combined repeated validation plus CSV improved 38.402 s to 8.855 s
+(4.34×), while pure reads remained slower than uncached reads. CSV bytes stayed
+identical. These workstation measurements do not establish real HPC throughput,
+cross-node behavior or PyTorch checkpoint runtime correctness.
+
+The source correction does not modify the active HPC checkout, source-frozen
+unfinished training, policies, registry snapshots, bundles, seeds or results.
+Transfer uses a separate staged clone, exact private-diff preservation and byte
+comparison of work_render.py/slurm_client.py; any later checkout-path policy
+switch requires the existing authoritative quiescence/adoption procedure. No job,
+Slurm query, install, download or research-artifact change was performed. The
+earlier performance/source-only records below are historical and are superseded
+where they asserted POSIX timestamp sufficiency.
+
 ## Later planning-validation performance correction
 
 The [performance correction and measurements](planning-validation-performance.md)

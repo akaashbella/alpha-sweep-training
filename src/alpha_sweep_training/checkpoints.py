@@ -303,6 +303,8 @@ def read_checkpoint(paths: RunPaths, reference: CheckpointReference, config: Run
         except Exception as exc:
             fail(f"Restricted checkpoint loading failed: {exc}")
     validate_checkpoint(payload, config, provenance, role=reference.role, completed_epochs=reference.completed_epochs)
+    from .planning_inspection import record_dependency
+    record_dependency(path, reference.sha256)
     return payload
 
 

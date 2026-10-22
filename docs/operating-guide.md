@@ -14,6 +14,12 @@ staged transfer. It preserves the existing 40-queued/4-running policy and all
 scientific authority. Local synthetic verification does not establish HPC runtime
 correctness or authorize research execution.
 
+The [HPC invalidation fix and exact update procedure](planning-validation-performance.md#exact-hpc-update-procedure)
+supersede `dcddd03`'s POSIX timestamp assumption. Reuse now proves dependency content
+with hashes on every platform; unchanged stat metadata is insufficient. The guide
+includes deterministic regressions, measured content-read overhead, staged merging
+of private HPC patches and the unchanged frozen-source continuation/adoption gate.
+
 The authoritative [scientific specification](scientific-specification.md) fixes
 240 training tasks and 6,720 independent evaluation slots. Component guides below
 define the detailed contracts; this guide orders their use. Shell variables denote

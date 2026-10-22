@@ -120,7 +120,7 @@ def collect_evaluation_coverage(inputs, *, evaluation_root=None, evaluator_prove
     key = ("evaluation_coverage", str(root), strict_json_text(inputs.binding),
            compatibility_key(evaluator_provenance))
     return inspection.reuse(key, (root,), lambda: _collect_evaluation_coverage(
-        inputs, evaluation_root=evaluation_root, evaluator_provenance=evaluator_provenance))
+        inputs, evaluation_root=evaluation_root, evaluator_provenance=evaluator_provenance), track_dependencies=True)
 
 
 def _collect_evaluation_coverage(inputs, *, evaluation_root=None, evaluator_provenance=None):

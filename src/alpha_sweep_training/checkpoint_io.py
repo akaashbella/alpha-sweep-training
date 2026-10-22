@@ -38,7 +38,10 @@ def digest_file(path: Path) -> str:
         digest = hashlib.sha256()
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(block)
-    return digest.hexdigest()
+    value = digest.hexdigest()
+    from .planning_inspection import record_dependency
+    record_dependency(path, value)
+    return value
 
 
 def relative_file(root: Path, relative: str, *, create_parents: bool = False) -> Path:
