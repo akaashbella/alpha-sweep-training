@@ -14,7 +14,7 @@ import uuid
 from .artifacts import _is_link
 from .checkpoint_io import digest_file, relative_file
 from .evaluation_persistence import _exclusive_lock
-from .hpc_policy import OperationalPolicy, WorkflowError, exact, same, resource_budget
+from .hpc_policy import OperationalPolicy, WorkflowError, exact, same, resource_budget, validate_array_arguments
 from .serialization import atomic_write_json, durable_mkdir, fsync_directory, read_json
 from .slurm_client import utc_now
 from .work_plans import check_seal, seal, validate_item, workflow_identity
@@ -131,6 +131,8 @@ def validate_state(state, manifest):
         if wave["status"] not in ("submission_uncertain", "submitted", "terminal", "confirmed_not_submitted"):
             raise WorkflowError("Unknown wave allocation state")
         resource_budget(old_policy, len(wave["items"]))
+        if wave["policy"]["policy_version"] == 2:
+            validate_array_arguments(old_policy, len(wave["items"]), wave["submission_arguments"])
         if not wave["items"] or len({item["training_run_id"] for item in wave["items"]}) != len(wave["items"]):
             raise WorkflowError("Wave contains empty, duplicate or overlapping training/evaluation ownership")
         for item in wave["items"]:
@@ -246,6 +248,7 @@ class WorkflowLease:
         if any(w["wave_id"] == bundle["wave_id"] for w in self.state["waves"]):
             raise WorkflowError("Wave already has submission intent; reconcile it, never submit again")
         resource_budget(self.policy, len(bundle["items"]))
+        validate_array_arguments(self.policy, len(bundle["items"]), submission_arguments)
         wave = {"wave_id": bundle["wave_id"], "bundle_reference": bundle_reference, "policy": self.policy.to_dict(),
             "policy_fingerprint": self.policy.fingerprint, "items": deepcopy(bundle["items"]),
             "status": "submission_uncertain", "scheduler": None, "scheduler_comment": bundle["scheduler_comment"],

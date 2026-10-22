@@ -10,7 +10,8 @@ from pathlib import PurePosixPath
 from .config import ConfigError, _read_yaml
 from .data_contract import content_identity
 
-POLICY_VERSION = 1
+POLICY_VERSION = 2
+MAX_QUEUED_TASKS = 40
 PUBLISHED_POLICY = {"checked_on": "2026-10-13", "partition": "dgxh",
     "source": "https://it.engineering.oregonstate.edu/hpc/slurm-howto",
     "max_wall_hours": 48, "max_gpus": 8, "max_cpus": 224, "max_memory_gb": 2000,
@@ -19,6 +20,7 @@ PATH_KEYS = {"checkout", "base_dir", "workflow_root", "slurm_log_root", "evaluat
              "output_root", "checkpoint_root", "result_root", "log_root", "data_root", "split_file"}
 LIMIT_KEYS = {"max_wall_hours", "max_gpus", "max_cpus", "max_memory_gb",
               "gpu_hours", "cpu_hours", "memory_gb_hours"}
+QUEUE_LIMIT_KEYS = {"max_submitted_tasks", "max_array_size", "max_array_tasks"}
 
 
 class WorkflowError(ConfigError):
@@ -80,9 +82,12 @@ class OperationalPolicy:
         doc = deepcopy(self._document)
         exact(doc, {"policy_version", "resources", "paths", "environment", "signals", "continuation",
                     "commands", "effective_limits"}, "workflow policy")
-        same(doc["policy_version"], POLICY_VERSION, "operational policy version")
-        resources = exact(doc["resources"], {"partition", "account", "qos", "constraint", "nodes", "gpus",
-            "cpus", "memory_gb", "wall_time", "max_concurrent", "num_workers", "native_threads"}, "resources")
+        if type(doc["policy_version"]) is not int or doc["policy_version"] not in (1, POLICY_VERSION):
+            raise WorkflowError("Unsupported operational policy version; version 1 is read unchanged, version 2 separates queued/running tasks")
+        version = doc["policy_version"]
+        resource_keys = {"partition", "account", "qos", "constraint", "nodes", "gpus",
+            "cpus", "memory_gb", "wall_time", "max_concurrent", "num_workers", "native_threads"}
+        resources = exact(doc["resources"], resource_keys | ({"max_queued"} if version == 2 else set()), "resources")
         for key, fixed in (("partition", "dgxh"), ("nodes", 1), ("gpus", 1)):
             same(resources[key], fixed, f"resources.{key}")
         for key in ("account", "qos", "constraint"):
@@ -92,6 +97,8 @@ class OperationalPolicy:
         integer(resources["cpus"], "cpus", maximum=PUBLISHED_POLICY["max_cpus"])
         integer(resources["memory_gb"], "memory_gb", maximum=PUBLISHED_POLICY["max_memory_gb"])
         integer(resources["max_concurrent"], "max_concurrent", maximum=PUBLISHED_POLICY["max_gpus"])
+        if version == 2:
+            integer(resources["max_queued"], "max_queued", maximum=MAX_QUEUED_TASKS)
         integer(resources["num_workers"], "num_workers", minimum=0)
         integer(resources["native_threads"], "native_threads")
         if resources["num_workers"] + resources["native_threads"] > resources["cpus"]:
@@ -130,7 +137,8 @@ class OperationalPolicy:
         integer(commands["timeout_seconds"], "command timeout", maximum=300)
         limits = doc["effective_limits"]
         if limits is not None:
-            exact(limits, LIMIT_KEYS | {"max_allocations", "inspection_report_path", "inspection_report_sha256"}, "reviewed account/QOS limits")
+            exact(limits, LIMIT_KEYS | {"max_allocations", "inspection_report_path", "inspection_report_sha256"}
+                  | (QUEUE_LIMIT_KEYS if version == 2 else set()), "reviewed account/QOS limits")
             shared_path(limits["inspection_report_path"], "inspection_report_path")
             digest = text(limits["inspection_report_sha256"], "inspection_report_sha256")
             if not re.fullmatch(r"[0-9a-f]{64}", digest):
@@ -140,9 +148,12 @@ class OperationalPolicy:
                     integer(limits[key], f"effective_limits.{key}")
                 elif type(limits[key]) not in (int, float) or not math.isfinite(limits[key]) or limits[key] <= 0:
                     raise WorkflowError(f"effective_limits.{key}: require actual finite positive reviewed bound")
-            integer(limits["max_allocations"], "effective_limits.max_allocations (reviewed job/submit-count allowance)")
+            integer(limits["max_allocations"], "effective_limits.max_allocations (reviewed running-job allowance in v2; job/submit allowance in v1)")
+            if version == 2:
+                for key in QUEUE_LIMIT_KEYS:
+                    integer(limits[key], f"effective_limits.{key} (explicit reviewed queue/array bound)")
         object.__setattr__(self, "_document", doc)
-        resource_budget(self, resources["max_concurrent"])
+        resource_budget(self, wave_capacity(self))
 
     def to_dict(self):
         return deepcopy(self._document)
@@ -207,25 +218,99 @@ def load_policy(path):
     return OperationalPolicy(_read_yaml(path))
 
 
+def wave_capacity(policy):
+    """Never add defaults to historical documents or change their fingerprints."""
+    doc = policy.to_dict()
+    return doc["resources"]["max_concurrent" if doc["policy_version"] == 1 else "max_queued"]
+
+
+def array_argument(policy, queued_tasks):
+    resource_budget(policy, queued_tasks)
+    integer(queued_tasks, "nonempty array size")
+    throttle = min(queued_tasks, policy.to_dict()["resources"]["max_concurrent"])
+    return f"--array=0-{queued_tasks - 1}%{throttle}"
+
+
+def validate_array_arguments(policy, queued_tasks, arguments):
+    """The sealed reservation must enforce the throttle used by its budget."""
+    if type(arguments) is not list or any(type(arg) is not str for arg in arguments):
+        raise WorkflowError("Submission arguments must be an exact string list")
+    array_args = [arg for arg in arguments if arg == "--array" or arg.startswith("--array=") or arg.startswith("-a")]
+    same(array_args, [array_argument(policy, queued_tasks)], "sealed array size and running throttle")
+
+
 def resource_budget(policy, allocations):
-    """Full requested overlap, including pending/unknown allocations, never measured use."""
+    """v1 preserves its original bytes/semantics; v2 budgets queued and running separately."""
     doc = policy.to_dict()
     integer(allocations, "managed overlapping allocations", minimum=0)
     r = doc["resources"]
-    if allocations > r["max_concurrent"]:
-        raise WorkflowError("Shared workflow concurrency cap exceeded")
+    if allocations > wave_capacity(policy):
+        raise WorkflowError("Shared workflow wave-size cap exceeded")
+    legacy = doc["policy_version"] == 1
+    running = allocations if legacy else min(allocations, r["max_concurrent"])
     hours = wall_seconds(r["wall_time"]) / 3600
     requested = {"max_wall_hours": hours if allocations else 0,
-        "max_gpus": allocations, "max_cpus": allocations * r["cpus"], "max_memory_gb": allocations * r["memory_gb"],
-        "gpu_hours": allocations * hours, "cpu_hours": allocations * r["cpus"] * hours,
-        "memory_gb_hours": allocations * r["memory_gb"] * hours}
+        "max_gpus": running, "max_cpus": running * r["cpus"], "max_memory_gb": running * r["memory_gb"],
+        "gpu_hours": running * hours, "cpu_hours": running * r["cpus"] * hours,
+        "memory_gb_hours": running * r["memory_gb"] * hours}
     effective = doc["effective_limits"]
-    if effective and allocations > effective["max_allocations"]:
-        raise WorkflowError("Combined requested allocations exceed reviewed account/QOS job/submit-count allowance")
+    if effective and running > effective["max_allocations"]:
+        raise WorkflowError("Running allocations exceed reviewed account/QOS running-job allowance")
+    if effective and not legacy:
+        for key in QUEUE_LIMIT_KEYS:
+            if allocations > effective[key]:
+                raise WorkflowError(f"Queued tasks exceed reviewed effective_limits.{key}")
     allowed = {k: min(PUBLISHED_POLICY[k], effective[k]) if effective else PUBLISHED_POLICY[k] for k in LIMIT_KEYS}
     rejected = [f"{k}: requested {v}, allowed {allowed[k]}" for k, v in requested.items() if v > allowed[k]]
     if rejected:
         raise WorkflowError("Combined allocation policy rejected: " + "; ".join(rejected))
-    return {"allocations": allocations, "requested_overlap": requested, "limits": allowed,
+    result = {"allocations": allocations, "requested_overlap": requested, "limits": allowed,
             "published_policy": deepcopy(PUBLISHED_POLICY), "effective_restrictions_reviewed": effective is not None,
             "unmeasured_planning_requests": True, "unrelated_jobs_controlled": False}
+    if not legacy:
+        result.pop("allocations")
+        result.update(resource_budget_version=2, queued_tasks=allocations, running_tasks=running,
+            running_throttle=r["max_concurrent"],
+            queued_limits=None if effective is None else {k: effective[k] for k in sorted(QUEUE_LIMIT_KEYS)},
+            requested_wave_totals={"gpu_hours": allocations * hours,
+                "cpu_hours": allocations * r["cpus"] * hours, "memory_gb_hours": allocations * r["memory_gb"] * hours})
+    return result
+
+
+def validate_array_evidence(report, policy):
+    """After full report validation, bind v2 reviewed array bounds to raw scontrol evidence.
+
+    Submission allowances remain an explicit account/QOS operator review. Parse
+    only cluster array caps, never infer an entitlement from a blank limit.
+    """
+    doc = policy.to_dict()
+    if doc["policy_version"] == 1:
+        return
+    configs = [row for row in report["reports"] if row["query_id"] == "configuration" and row["ok"]]
+    if len(configs) != 1 or type(configs[0]["stdout"]) is not str:
+        raise WorkflowError("Require unambiguous scontrol configuration evidence for array limits")
+    output = configs[0]["stdout"]
+    def setting(name):
+        values = re.findall(r"^[ \t]*" + name + r"[ \t]*=[ \t]*([^\r\n]*)$", output, re.MULTILINE)
+        if len(values) != 1 or not values[0].strip():
+            raise WorkflowError(f"Missing/ambiguous {name} evidence; recollect and review array limits")
+        return values[0].strip()
+    size = setting("MaxArraySize")
+    if re.fullmatch(r"[1-9]\d*", size) is None:
+        raise WorkflowError("Invalid MaxArraySize evidence")
+    maximum_size = int(size)
+    parameters = setting("SchedulerParameters")
+    parts = [part.strip() for part in parameters.split(",")]
+    if parameters != "(null)" and any(re.fullmatch(r"[A-Za-z0-9_]+(?:=[^,\s]+)?", part) is None for part in parts):
+        raise WorkflowError("Malformed SchedulerParameters evidence")
+    task_limits = [part.split("=", 1)[1] for part in parts if part.lower().startswith("max_array_tasks=")]
+    if "max_array_tasks" in parameters.lower() and (len(task_limits) != 1 or re.fullmatch(r"[1-9]\d*", task_limits[0]) is None):
+        raise WorkflowError("Malformed/ambiguous max_array_tasks evidence")
+    # Documented Slurm default when a complete SchedulerParameters value omits
+    # this option; this is not a guessed default for missing query output.
+    maximum_tasks = min(maximum_size, int(task_limits[0])) if task_limits else maximum_size
+    limits = doc["effective_limits"]
+    if limits is None:
+        raise WorkflowError("Review submission and array limits before submission")
+    if limits["max_array_size"] > maximum_size or limits["max_array_tasks"] > maximum_tasks:
+        raise WorkflowError("Reviewed array bounds exceed recorded MaxArraySize/max_array_tasks; recollect/review policy")

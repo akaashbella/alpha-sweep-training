@@ -8,7 +8,7 @@ import uuid
 from .artifacts import _is_link
 from .checkpoint_io import digest_file, relative_file
 from .data_contract import content_identity
-from .hpc_policy import WorkflowError, load_policy, same, shared_path
+from .hpc_policy import WorkflowError, load_policy, same, shared_path, validate_array_evidence
 from .manifests import load_manifest, select_task, task_config
 from .serialization import atomic_write_json, durable_mkdir, fsync_directory, read_json, strict_json_text
 from .slurm_client import SlurmClient, utc_now, validate_restriction_report
@@ -26,7 +26,9 @@ def verify_effective_evidence(policy):
         raise WorkflowError("Linked restriction evidence is rejected")
     same(digest_file(path), limits["inspection_report_sha256"], "actual restriction inspection evidence")
     report = read_json(path)
-    return validate_restriction_report(report, policy.to_dict()["resources"])
+    validate_restriction_report(report, policy.to_dict()["resources"])
+    validate_array_evidence(report, policy)
+    return report
 
 
 def submit_bundle(workflow, bundle, *, execute=False):

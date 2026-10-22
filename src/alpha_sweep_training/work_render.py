@@ -5,12 +5,10 @@ import hashlib
 from pathlib import Path
 import shlex
 
-from .checkpoint_io import relative_file, digest_file
 from .data_contract import content_identity
-from .hpc_policy import WorkflowError, exact, same, resource_budget
+from .hpc_policy import WorkflowError, exact, same, resource_budget, wave_capacity, array_argument
 from .serialization import atomic_write_text
 from .work_plans import seal, check_seal, validate_plan, validate_item, workflow_identity
-from .workflow_registry import immutable_json
 
 
 def wave_identity(workflow_id, plan_digest, policy_fingerprint, items):
@@ -98,7 +96,7 @@ def render_work(plan, manifest, policy, *, work_ids=None):
             continue
         selected.append(deepcopy(item))
         seen.add(item["training_run_id"])
-        if work_ids is None and len(selected) == policy.to_dict()["resources"]["max_concurrent"]:
+        if work_ids is None and len(selected) == wave_capacity(policy):
             break
     if not selected:
         raise WorkflowError("No eligible work to render; inspect complete/failure/phase/continuation coverage")
@@ -108,7 +106,7 @@ def render_work(plan, manifest, policy, *, work_ids=None):
     root = Path(policy.to_dict()["paths"]["workflow_root"])
     mapping = root / "bundles" / wave_id / "mapping.json"
     script = batch_source(policy, mapping, execution_pin=plan["execution_provenance"])
-    bundle = seal({"bundle_version": 1, "kind": "allocation_wave", "wave_id": wave_id,
+    bundle = seal({"bundle_version": policy.to_dict()["policy_version"], "kind": "allocation_wave", "wave_id": wave_id,
         "workflow_id": workflow_id, "plan_sha256": plan["document_sha256"], "manifest_path": plan["manifest_path"],
         "manifest_grid_id": manifest.grid_id, "manifest_document_sha256": manifest.document_sha256,
         "policy": policy.to_dict(), "policy_fingerprint": policy.fingerprint,
@@ -125,7 +123,7 @@ def validate_bundle(bundle, manifest, policy):
     exact(bundle, {"bundle_version", "kind", "wave_id", "workflow_id", "plan_sha256", "manifest_path",
         "manifest_grid_id", "manifest_document_sha256", "policy", "policy_fingerprint", "execution_provenance",
         "items", "array_mapping", "scheduler_comment", "resource_policy", "script_sha256", "document_sha256"}, "wave mapping")
-    same(bundle["bundle_version"], 1, "bundle version")
+    same(bundle["bundle_version"], policy.to_dict()["policy_version"], "bundle/policy version")
     same(bundle["kind"], "allocation_wave", "bundle lifecycle mapping")
     same(bundle["workflow_id"], workflow_identity(manifest), "bundle workflow")
     same(bundle["manifest_grid_id"], manifest.grid_id, "bundle manifest grid")
@@ -148,6 +146,8 @@ def validate_bundle(bundle, manifest, policy):
 
 
 def write_bundle(workflow, bundle, script):
+    from .checkpoint_io import relative_file, digest_file
+    from .workflow_registry import immutable_json
     workflow.guard()
     validate_bundle(bundle, workflow.manifest, workflow.policy)
     root, wave_id = workflow.root, bundle["wave_id"]
@@ -171,7 +171,7 @@ def submission_arguments(bundle, policy):
     args = ["--parsable", "--no-requeue", "--nodes=1", "--ntasks=1", "--gpus-per-node=1",
         "--partition=dgxh", f"--account={r['account']}", f"--cpus-per-task={r['cpus']}",
         f"--mem={r['memory_gb']}G", f"--time={r['wall_time']}",
-        f"--array=0-{count - 1}%{count}", f"--signal=B:USR1@{policy.to_dict()['signals']['lead_seconds']}",
+        array_argument(policy, count), f"--signal=B:USR1@{policy.to_dict()['signals']['lead_seconds']}",
         "--export=NONE", f"--comment={bundle['scheduler_comment']}", f"--job-name=alpha-sweep-{bundle['wave_id'][:12]}",
         "--chdir=" + paths["checkout"], "--output=" + paths["slurm_log_root"] + "/%A_%a.out",
         "--error=" + paths["slurm_log_root"] + "/%A_%a.err"]

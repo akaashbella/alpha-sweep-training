@@ -3,7 +3,7 @@
 from copy import deepcopy
 
 from .data_contract import content_identity
-from .hpc_policy import WorkflowError, exact, integer, same, resource_budget
+from .hpc_policy import WorkflowError, exact, integer, same, resource_budget, wave_capacity
 from .manifests import manifest_from_dict, select_task
 
 WORK_VERSION = 1
@@ -41,6 +41,20 @@ def history_for(state, key):
                     "outcome": wave.get("outcomes", {}).get(str(index)), "diagnostics": wave.get("diagnostics", {}).get(str(index), []),
                     "allocation_ordinal": item["allocation_ordinal"]})
     return history
+
+
+def wave_reservations(state, policy):
+    """Unknown/pending elements retain queue slots and their wave's enforced throttle.
+
+    Sum all uncertain waves if historical accounting reopens more than one;
+    reporting that excess must never create permission to submit a replacement.
+    """
+    waves = [w for w in state["waves"] if w["status"] not in ("terminal", "confirmed_not_submitted")]
+    queued = sum(len(w["items"]) for w in waves)
+    if policy.to_dict()["policy_version"] == 1:
+        return {"reserved_allocations": queued}
+    running = sum(min(len(w["items"]), w["policy"]["resources"]["max_concurrent"]) for w in waves)
+    return {"reserved_queued_tasks": queued, "reserved_running_tasks": running}
 
 
 def build_work_plan(manifest, policy, *, manifest_path, state=None, retry_run_ids=(), retry_reason=None):
@@ -154,15 +168,15 @@ def build_work_plan(manifest, policy, *, manifest_path, state=None, retry_run_id
             observations.append({"training_run_id": task.run_id, "lifecycle": "evaluation", "classification": classification, "coverage": evaluation})
         except Exception as exc:
             observations.append({"training_run_id": task.run_id, "lifecycle": "evaluation", "classification": "inspection_error", "diagnostic": f"{type(exc).__name__}: {exc}"})
-    return seal({"plan_version": 1, "kind": "workflow_work_plan", "workflow_id": workflow_identity(manifest),
+    return seal({"plan_version": doc["policy_version"], "kind": "workflow_work_plan", "workflow_id": workflow_identity(manifest),
         "manifest_path": str(manifest_path), "manifest_grid_id": manifest.grid_id,
         "manifest_document_sha256": manifest.document_sha256, "policy": doc, "policy_fingerprint": policy.fingerprint,
         "execution_provenance": execution_pin,
         "registry_revision": state["revision"], "phase2_training_eligible": phase2,
         "unresolved_waves": active,
-        "reserved_allocations": sum(len(w["items"]) for w in state["waves"] if w["wave_id"] in active),
+        **wave_reservations(state, policy),
         "capacity_available_for_submission": not active,
-        "resource_policy": resource_budget(policy, min(len(items), doc["resources"]["max_concurrent"])),
+        "resource_policy": resource_budget(policy, min(len(items), wave_capacity(policy))),
         "items": items, "observations": observations})
 
 
@@ -204,11 +218,13 @@ def validate_item(item, manifest):
 
 def validate_plan(plan, manifest, policy):
     check_seal(plan)
+    version = policy.to_dict()["policy_version"]
+    reservations = {"reserved_allocations"} if version == 1 else {"reserved_queued_tasks", "reserved_running_tasks"}
     exact(plan, {"plan_version", "kind", "workflow_id", "manifest_path", "manifest_grid_id", "manifest_document_sha256",
         "policy", "policy_fingerprint", "registry_revision", "phase2_training_eligible", "unresolved_waves", "resource_policy",
-        "reserved_allocations", "capacity_available_for_submission",
-        "execution_provenance", "items", "observations", "document_sha256"}, "work plan")
-    same(plan["plan_version"], 1, "plan version")
+        "capacity_available_for_submission", "execution_provenance", "items", "observations", "document_sha256"}
+        | reservations, "work plan")
+    same(plan["plan_version"], version, "plan/policy version")
     same(plan["kind"], "workflow_work_plan", "plan kind")
     same(plan["workflow_id"], workflow_identity(manifest), "workflow identity")
     same(plan["manifest_grid_id"], manifest.grid_id, "work manifest grid")
