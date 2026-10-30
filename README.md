@@ -4,6 +4,16 @@ Research implementation for how **training-time Gaussian weight perturbation**
 affects clean performance and independently measured fixed-network weight
 robustness across CNN architectures.
 
+These are **four fixed architecture-specific recipes**: ResNet-50 uses SGD,
+MobileNetV3-Large/EfficientNet-B0 use RMSprop, and ConvNeXt-Tiny uses AdamW.
+Within-model alpha comparisons hold each recipe fixed; cross-model differences
+cannot isolate architecture or establish optimizer-independent effects.
+The [CIFAR-10 optimization audit](docs/cifar10-optimization-audit.md) records reported
+MobileNet alpha-zero instability, unavailable saved-state evidence, the presentation
+correction and a separate [diagnostic execution handoff](docs/diagnostic-execution.md).
+The opt-in tools/checks are implemented for review, **not executed or validated**;
+they do not change main-v1 recipes, select test-tuned replacements or start CIFAR-100.
+
 Steps 1–9 implement the scientific specification, strict configuration,
 scientific run identity, safe artifact initialization, shared CIFAR preparation,
 reproducible full-set loaders, all four scratch CIFAR model builders, eligible

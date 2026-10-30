@@ -7,6 +7,16 @@ preparation, artifact generation, reporting and Slurm/research execution. Nothin
 in this sequence was executed during Step 9. Runtime correctness, launch readiness,
 resource needs and experiment completion remain unverified.
 
+The [October 30 CIFAR-10 optimization audit](cifar10-optimization-audit.md) and
+[isolated diagnostic handoff](diagnostic-execution.md) are separate from production
+workflow advancement. They preserve main-v1 and prepare explicit runtime stages
+for MobileNet's reported alpha-zero instability. No diagnosis is reproduced and
+no recipe/rerun/CIFAR-100 execution is authorized by that source implementation.
+The review's focused CPU-only suite is separately authorized; its local attempt
+was blocked before tests by incompatible Python/Torch/TorchVision versions. See
+the diagnostic handoff for the explicit CPU entry point, mocked-wiring limits,
+structured failure records and bounded-trace-then-untraced-baseline sequence.
+
 The later [planning-validation performance correction](planning-validation-performance.md)
 documents operation-local validation reuse, fresh pre-submission checks, stderr
 progress, explicitly authorized isolated tests/benchmark measurements and safe
