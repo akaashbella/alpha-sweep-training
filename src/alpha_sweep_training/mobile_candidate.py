@@ -24,6 +24,7 @@ AUDITED_BASELINE_FINGERPRINT = "89deb14382b735fd8a8f59cb790886e93f48eb19560993c7
 ORIGINAL_ENV = "/nfs/hpc/share/bellaak/research/alpha-sweep/alpha-sweep-training/.venv"
 THREAD_ENV = ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS",
               "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS")
+PILOT_OPERATIONS = ("auto", "new", "continue")
 
 
 def candidate_config(original, candidate_root, *, seed=0, alpha=0.0):
@@ -189,6 +190,8 @@ def load_pilot(path):
 
 
 def _run(args):
+    if args.operation not in PILOT_OPERATIONS:
+        raise ConfigError("GPU pilot operations are auto/new/continue; use the CPU controller for full-budget publication recovery")
     from .allocation_signals import allocation_signal_handlers
     from .interruption import StopRequest
     stop = StopRequest()
@@ -310,7 +313,8 @@ def main(argv=None):
     run = commands.add_parser("run", help="Later explicit GPU stage: one alpha-zero seed, native persistence/continuation")
     run.add_argument("--plan", required=True)
     run.add_argument("--seed", type=int, choices=(0, 1, 2), required=True)
-    run.add_argument("--operation", choices=("auto", "new", "continue", "recover"), default="auto")
+    run.add_argument("--operation", choices=PILOT_OPERATIONS, default="auto",
+                     help="GPU training dispatch only; full-budget publication recovery uses controller run --operation recover")
     report = commands.add_parser("report", help="Later CPU stage: every seed, full trajectories, no test data")
     report.add_argument("--plan", required=True)
     report.add_argument("--output-dir", required=True)

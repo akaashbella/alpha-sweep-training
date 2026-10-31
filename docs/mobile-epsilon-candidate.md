@@ -92,7 +92,9 @@ Native run metadata is below
 run ID also includes the profile prefix. This protects writers even when a root
 override is supplied through a generic native service. Copied foreign profile
 owners reject continuation and archival overwrite. The pilot runner accepts no
-storage overrides or overwrite operation and rechecks all thirty storage bindings.
+storage overrides, overwrite or recover operation and rechecks all thirty storage
+bindings. Its operations are `auto`, `new`, and `continue`. Recovery belongs to
+the separate native controller publication path described below.
 
 | Index / array index | Actual seed | Training alpha | Epochs | Run ID |
 | --- | ---: | ---: | ---: | --- |
@@ -128,7 +130,8 @@ training, evaluation, reporting or Slurm commands were executed here.
 Run the focused CPU suite later in the **original existing environment**, from
 the new candidate checkout. The runner gates Python/dependency versions before
 project/Torch imports, hides CUDA, and selects only CPU classes. It now includes
-nine candidate checks in addition to the established twenty CPU checks. The
+nine candidate contract checks and five pilot wiring checks in addition to the
+established twenty CPU checks. The
 mixed GPU suite is never discovered by this runner. The supplied H100 test
 fixture correction is included (`@t.inference_mode()` on nested `whole_pass`);
 production evaluation is unchanged. Historical H100/CPU passes reported in the
@@ -149,6 +152,13 @@ native candidate epsilon/group ownership and schedule restore, rejected profile
 combinations/options, exact thirty-member grid and three-member pilot, foreign
 resume/overwrite owners and disjoint roots, best/final/latest receipt authority,
 audited-baseline binding, earliest exact ties, and full per-seed reporting.
+Pilot wiring checks exercise the real CLI build/load/manifest/file path with
+prepared-data and provenance doubles, seal/membership/storage rejection, and
+every allowed seed/operation dispatch with a fake CUDA module and mocked native
+executor. They also verify that `recover` rejects before pilot side effects and
+that full-budget CPU controller recovery reaches publication repair without
+StopRequest, loader/model/runtime construction or training. No CUDA state or
+training model is constructed by these five checks.
 Tiny native CPU modules and record doubles do not establish MobileNet/CUDA/runtime
 checkpoint correctness. `tests/fixtures/main_v1_spec.py` contains the exact
 audited original specification as a frozen compatibility oracle.
@@ -255,10 +265,37 @@ or unclassified failures need an audited operator decision before explicit
 `PILOT_OPERATION=continue`. No replacement is implemented by this direct path.
 Keep source/environment frozen across all allocations. Native continuation restores
 optimizer before scheduler, then data/runtime/noise state without reseeding.
-At a committed count-200 boundary, publication-only recovery can also use native
-`controller run --operation recover --manifest ... --run-id <exact candidate ID>
---base-dir "$ORIGINAL_BASE" --source-root "$CANDIDATE_CHECKOUT"` on CPU; it does
-not need this pilot runner's full-GPU preflight.
+After `controller status` verifies `full_budget_committed: true` and
+`completed_epochs: 200` for the exact run, use the existing CPU controller for
+publication repair. The GPU pilot CLI deliberately rejects `--operation recover`:
+it owns a StopRequest for training, which native publication recovery forbids.
+Do not set `PILOT_OPERATION=recover` in the batch template.
+
+```bash
+: "${RECOVERY_RUN_ID:?Exact candidate run ID with verified count-200 authority}"
+cd "$CANDIDATE_CHECKOUT"
+PYTHONPATH="$CANDIDATE_CHECKOUT/src" "$EXISTING_ENV/bin/python" -B \
+  -m alpha_sweep_training.controller run \
+  --manifest "$CANDIDATE_ROOT/study.json" --run-id "$RECOVERY_RUN_ID" \
+  --base-dir "$ORIGINAL_BASE" --source-root "$CANDIDATE_CHECKOUT" --operation recover
+```
+
+This path supplies no StopRequest and uses TrainingFinalizationPlan before any
+loader/model/CUDA construction. `recover` repairs views of committed authority;
+it does not publish a missing training-completion transaction. If count 200 is
+committed but completion publication is still pending, the same controller command
+with `--operation auto` dispatches publication-only finalization. Neither operation
+adds epochs, writes tensor checkpoints or needs a test pass. These CPU guarantees
+apply to verified full-budget authority; unfinished-run recovery has separate
+ContinuationPlan/component requirements and is not presented as a CPU-only path.
+
+Recovery follow-up to `ae35d72`: the five wiring checks above are added but remain
+**unrun**, with no compatible local environment available. This source change
+does not alter scientific settings or recipes, and does not rewrite any artifact
+or frozen plan. Existing source pins remain enforced: do not rewrite old pins or
+continue unfinished work with changed source. New GPU execution using this fix
+requires a newly frozen plan in a new guarded namespace; historical count-200
+publication-only recovery retains its existing historical-provenance policy.
 
 ## Per-seed validation report and later decision — unrun
 

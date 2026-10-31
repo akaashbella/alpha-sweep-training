@@ -5,16 +5,19 @@ retained as a historical wire/fingerprint oracle, never a production import.
 """
 
 from copy import deepcopy
+from contextlib import ExitStack, nullcontext, redirect_stderr, redirect_stdout
 from dataclasses import replace
 import hashlib
 import importlib.util
+import io
 import json
 import os
+import sys
 from pathlib import Path
 import tempfile
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 fixture = importlib.util.spec_from_file_location("frozen_main_v1_spec", Path(__file__).parent / "fixtures" / "main_v1_spec.py")
 historical = importlib.util.module_from_spec(fixture)
@@ -293,3 +296,190 @@ class CandidateContracts(unittest.TestCase):
             self.assertEqual(row["health"]["assessment"], "unreviewed")
             self.assertTrue(row["failures"])
         self.assertTrue(all("metadata_only" not in call.kwargs for call in reader.call_args_list))
+
+
+@unittest.skipUnless(os.environ.get("ALPHA_SWEEP_DIAGNOSTIC_TESTS") == "1", "Explicit pinned CPU checks required")
+class PilotWiring(unittest.TestCase):
+    """Real declaration/manifest/file wiring; prepared data, provenance and compute are doubles."""
+
+    def setUp(self):
+        from alpha_sweep_training.config import RunConfig
+        from alpha_sweep_training.identity import scientific_fingerprint
+        from alpha_sweep_training.serialization import atomic_write_json
+        self.stack = ExitStack()
+        self.addCleanup(self.stack.close)
+        directory = self.stack.enter_context(tempfile.TemporaryDirectory(prefix="mobile-pilot-wiring-"))
+        self.root = Path(directory).resolve()
+        self.original = self.root / "original"
+        self.original.mkdir()
+        self.source = self.root / "source"
+        self.source.mkdir()
+        self.candidate_root = self.root / "candidate"
+        self.saved = self.original / "resolved.json"
+        original = RunConfig(resolved(historical.default_document("cifar10", "mobilenetv3_large")))
+        atomic_write_json(self.saved, original.to_dict())
+        self.original_bytes = self.saved.read_bytes()
+        # The fixture has synthetic identities. Only this scientific evidence
+        # gate is replaced; production still requires the real audited hash.
+        self.stack.enter_context(patch("alpha_sweep_training.mobile_candidate.AUDITED_BASELINE_FINGERPRINT",
+                                      scientific_fingerprint(original)))
+        prepared = study().tasks[0].prepared_data
+        bundle = SimpleNamespace(manifest={**prepared, "identity": prepared["preparation_identity"]},
+            sources=SimpleNamespace(training_record={"identity": prepared["official_training_identity"]},
+                                    test_record={"identity": prepared["official_test_identity"]}))
+        self.loader = self.stack.enter_context(patch("alpha_sweep_training.prepared.load_prepared_dataset", return_value=bundle))
+        self.pin = {"code": {"source_sha256": "e" * 64}, "software": {"python": "3.11.15",
+            "torch": "2.5.1+cu124", "torchvision": "0.20.1+cu124", "numpy": "1.26.4",
+            "PyYAML": "6.0.3", "cuda": "12.4", "cudnn": "90100"}}
+        self.provenance = self.stack.enter_context(patch("alpha_sweep_training.execution_provenance.collect_provenance",
+                                                       return_value=self.pin))
+        self.inputs = {"activation_script": str(self.original / "bin" / "activate"), "unit_launch_pin": True}
+        self.stack.enter_context(patch("alpha_sweep_training.mobile_candidate._launch_inputs", return_value=self.inputs))
+        self.build_argv = ["build", "--saved-config", str(self.saved), "--base-dir", str(self.original),
+            "--source-root", str(self.source), "--candidate-root", str(self.candidate_root),
+            "--activation-script", self.inputs["activation_script"], "--protected-root", str(self.original / "workflow")]
+
+    def build(self):
+        from alpha_sweep_training.mobile_candidate import main, load_pilot
+        output = io.StringIO()
+        with redirect_stdout(output):
+            self.assertEqual(main(self.build_argv), 0)
+        self.plan_path = self.candidate_root / "pilot.json"
+        plan, manifest = load_pilot(self.plan_path)
+        self.assertEqual(json.loads(output.getvalue()), plan)
+        return plan, manifest
+
+    def test_build_load_roundtrip_keeps_thirty_tasks_three_configs_and_original_bytes(self):
+        from alpha_sweep_training.mobile_candidate import main
+        from alpha_sweep_training.serialization import read_json
+        plan, manifest = self.build()
+        self.assertEqual(len(manifest.tasks), 30)
+        self.assertEqual(plan["pilot_run_ids"], [t.run_id for t in manifest.tasks[:3]])
+        for seed in (0, 1, 2):
+            self.assertEqual(read_json(self.candidate_root / f"seed-{seed}.config.json"), manifest.tasks[seed].config.to_dict())
+        self.assertTrue((self.candidate_root / "allocation-logs").is_dir())
+        self.assertTrue(self.loader.call_args.kwargs["metadata_only"])
+        before = {p.relative_to(self.candidate_root): p.read_bytes()
+                  for p in self.candidate_root.rglob("*") if p.is_file()}
+        with redirect_stderr(io.StringIO()):
+            self.assertEqual(main(self.build_argv), 22)  # No replacement of an owned plan.
+        after = {p.relative_to(self.candidate_root): p.read_bytes()
+                 for p in self.candidate_root.rglob("*") if p.is_file()}
+        self.assertEqual(before, after)
+        self.assertEqual(self.saved.read_bytes(), self.original_bytes)
+
+    def test_load_rejects_bad_seals_wrong_pilot_membership_and_redirected_storage(self):
+        from alpha_sweep_training.mobile_candidate import load_pilot
+        from alpha_sweep_training.manifests import _sealed
+        from alpha_sweep_training.serialization import atomic_write_json
+        plan, manifest = self.build()
+        corrupted = deepcopy(plan)
+        corrupted["pilot_indices"] = [0, 1, 3]
+        atomic_write_json(self.plan_path, corrupted)
+        with self.assertRaises(ConfigError):
+            load_pilot(self.plan_path)
+        changed = {k: v for k, v in plan.items() if k != "document_sha256"}
+        changed["pilot_run_ids"] = [t.run_id for t in manifest.tasks[3:6]]
+        atomic_write_json(self.plan_path, _sealed(changed))
+        with self.assertRaises(ConfigError):
+            load_pilot(self.plan_path)
+        document = manifest.to_dict()
+        document.pop("document_sha256")
+        document["tasks"][29]["config"]["execution"]["storage"]["output_root"] = str(self.original)
+        document = _sealed(document)
+        atomic_write_json(self.candidate_root / "study.json", document)
+        changed = {k: v for k, v in plan.items() if k != "document_sha256"}
+        changed["manifest_document_sha256"] = document["document_sha256"]
+        atomic_write_json(self.plan_path, _sealed(changed))
+        with self.assertRaisesRegex(ConfigError, "owned run root"):
+            load_pilot(self.plan_path)
+        self.assertEqual(self.saved.read_bytes(), self.original_bytes)
+
+    def test_gpu_cli_dispatches_each_pilot_seed_with_stop_using_only_mocked_cuda(self):
+        from alpha_sweep_training.mobile_candidate import main, PILOT_OPERATIONS
+        from alpha_sweep_training.interruption import StopRequest
+        _, manifest = self.build()
+        backend = ModuleType("torch")
+        backend.set_num_threads = Mock()
+        backend.set_num_interop_threads = Mock()
+        backend.cuda = SimpleNamespace(device_count=Mock(return_value=1), get_device_properties=Mock(return_value=
+            SimpleNamespace(name="NVIDIA H100 80GB HBM3", major=9, minor=0, total_memory=85009367040)))
+        env = {"CUBLAS_WORKSPACE_CONFIG": ":4096:8", "SLURM_NTASKS": "1", "SLURM_CPUS_PER_TASK": "8",
+               "SLURM_JOB_PARTITION": "dgxh", "SLURM_JOB_NUM_NODES": "1", "SLURM_JOB_ID": "123",
+               "CUDA_VISIBLE_DEVICES": "unit-visible-gpu"}
+        result = SimpleNamespace(to_dict=lambda: {"outcome": "unit_interrupted", "exit_code": 10}, exit_code=10)
+        with patch("alpha_sweep_training.task_execution.execute_task", return_value=result) as execute, \
+             patch("alpha_sweep_training.allocation_signals.allocation_signal_handlers", side_effect=lambda stop: nullcontext()) as signals, \
+             patch.dict(sys.modules, {"torch": backend}), patch.dict(os.environ, env, clear=True):
+            for operation in PILOT_OPERATIONS:
+                for seed in (0, 1, 2):
+                    os.environ["SLURM_ARRAY_TASK_ID"] = str(seed)
+                    output = io.StringIO()
+                    with redirect_stdout(output):
+                        code = main(["run", "--plan", str(self.plan_path), "--seed", str(seed), "--operation", operation])
+                    self.assertEqual(code, 10)
+                    self.assertEqual(json.loads(output.getvalue()), result.to_dict())
+                    call = execute.call_args
+                    self.assertEqual(call.args[1].run_id, manifest.tasks[seed].run_id)
+                    self.assertEqual(call.kwargs["operation"], operation)
+                    self.assertEqual(call.kwargs["source_root"], str(self.source))
+                    self.assertEqual(call.kwargs["base_dir"], str(self.original))
+                    self.assertIsInstance(call.kwargs["stop"], StopRequest)
+                    self.assertIs(call.kwargs["stop"], signals.call_args.args[0])
+            self.assertEqual(execute.call_count, 9)
+            execute.reset_mock()
+            os.environ["SLURM_ARRAY_TASK_ID"] = "2"
+            with redirect_stderr(io.StringIO()):
+                self.assertEqual(main(["run", "--plan", str(self.plan_path), "--seed", "0"]), 22)
+            execute.assert_not_called()
+        backend.set_num_threads.assert_called_with(8)
+        backend.set_num_interop_threads.assert_called_with(112)
+
+    def test_recover_is_rejected_before_gpu_runner_side_effects(self):
+        from alpha_sweep_training.mobile_candidate import main, _run
+        with patch("alpha_sweep_training.mobile_candidate._run") as run, redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit) as error:
+                main(["run", "--plan", "/not/opened/pilot.json", "--seed", "0", "--operation", "recover"])
+            self.assertEqual(error.exception.code, 2)
+            run.assert_not_called()
+        with patch("alpha_sweep_training.allocation_signals.allocation_signal_handlers") as signals, \
+             patch("alpha_sweep_training.mobile_candidate.load_pilot") as load:
+            with self.assertRaisesRegex(ConfigError, "CPU controller"):
+                _run(SimpleNamespace(operation="recover"))
+            signals.assert_not_called()
+            load.assert_not_called()
+
+    def test_cpu_controller_full_budget_recovery_uses_publication_plan_without_stop_or_models(self):
+        from alpha_sweep_training.controller import main
+        from alpha_sweep_training.continuation import TrainingFinalizationPlan
+        from alpha_sweep_training.coverage import TaskObservation
+        from alpha_sweep_training.interruption import StopRequest
+        _, manifest = self.build()
+        task = manifest.tasks[0]
+        observation = TaskObservation(run_id=task.run_id, scientific_fingerprint=task.fingerprint,
+            global_index=0, phase=1, phase_index=0, dataset="cifar10", architecture="mobilenetv3_large",
+            alpha=0., canonical_alpha="0", training_seed=0, condition="ok", full_budget_committed=True,
+            completed_epochs=200, stored_status="training_pending_completion")
+        service = Mock()
+        with patch("alpha_sweep_training.task_execution.inspect_task", return_value=observation), \
+             patch("alpha_sweep_training.task_execution.open_run", return_value=nullcontext(object())) as open_run, \
+             patch("alpha_sweep_training.persistence.DurableTrainingPersistence", return_value=service), \
+             patch("alpha_sweep_training.data.build_loaders", side_effect=AssertionError("No loaders in publication recovery")) as loaders, \
+             patch("alpha_sweep_training.models.build_model", side_effect=AssertionError("No model in publication recovery")) as model, \
+             patch("alpha_sweep_training.runtime.build_runtime", side_effect=AssertionError("No CUDA in publication recovery")) as runtime, \
+             patch("alpha_sweep_training.training.train_run", side_effect=AssertionError("No training in publication recovery")) as train, \
+             patch.object(StopRequest, "__init__", side_effect=AssertionError("No StopRequest in CPU recovery")), \
+             redirect_stdout(io.StringIO()) as output:
+            code = main(["run", "--manifest", str(self.candidate_root / "study.json"),
+                "--run-id", manifest.tasks[0].run_id, "--base-dir", str(self.original),
+                "--source-root", str(self.source), "--operation", "recover"])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(output.getvalue())["outcome"], "training_publication_repaired")
+        self.assertIsInstance(open_run.call_args.kwargs["continuation_plan"], TrainingFinalizationPlan)
+        self.assertEqual(open_run.call_args.kwargs["operation"], "recover")
+        service.repair_publication.assert_called_once_with()
+        service.publish_training_completion.assert_not_called()
+        loaders.assert_not_called()
+        model.assert_not_called()
+        runtime.assert_not_called()
+        train.assert_not_called()
