@@ -305,7 +305,7 @@ class PilotWiring(unittest.TestCase):
     def setUp(self):
         from alpha_sweep_training.config import RunConfig
         from alpha_sweep_training.identity import scientific_fingerprint
-        from alpha_sweep_training.serialization import atomic_write_json
+        from alpha_sweep_training.serialization import save_resolved_config
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
         directory = self.stack.enter_context(tempfile.TemporaryDirectory(prefix="mobile-pilot-wiring-"))
@@ -315,9 +315,9 @@ class PilotWiring(unittest.TestCase):
         self.source = self.root / "source"
         self.source.mkdir()
         self.candidate_root = self.root / "candidate"
-        self.saved = self.original / "resolved.json"
+        self.saved = self.original / "resolved_config.yaml"
         original = RunConfig(resolved(historical.default_document("cifar10", "mobilenetv3_large")))
-        atomic_write_json(self.saved, original.to_dict())
+        save_resolved_config(self.saved, original)
         self.original_bytes = self.saved.read_bytes()
         # The fixture has synthetic identities. Only this scientific evidence
         # gate is replaced; production still requires the real audited hash.
