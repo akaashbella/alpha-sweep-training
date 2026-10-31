@@ -12,10 +12,12 @@ from .config import ConfigError, RunConfig, from_declaration
 from .data_contract import content_identity, require_seed
 from .identity import canonical_alpha, run_identity, scientific_fingerprint
 from .serialization import atomic_write_json, durable_mkdir, fsync_directory, read_json, strict_json_text
-from .spec import ALPHAS, ARCHITECTURES, DATASETS, SEED_COUNT, TOTAL_RUNS
+from .spec import (ALPHAS, ARCHITECTURES, DATASETS, SEED_COUNT, TOTAL_RUNS,
+                   SPECIFICATION_VERSION, MOBILE_EPSILON_PROFILE)
 
 MANIFEST_VERSION = 1
 GRID_VERSION = "ordered-scientific-tasks-v1"
+MOBILE_GRID_VERSION = "cifar10-mobile-eps0316-30-tasks-v1"
 PHASE_SIZE = TOTAL_RUNS // len(DATASETS)
 DATA_KEYS = {"split_identity", "normalization_identity", "preprocessing_identity",
              "preparation_identity", "official_training_identity", "official_test_identity"}
@@ -108,8 +110,8 @@ class Task:
             "prepared_data": self.prepared_data}
 
 
-def _grid_id(tasks):
-    return _digest({"grid_version": GRID_VERSION, "manifest_version": MANIFEST_VERSION,
+def _grid_id(tasks, grid_version=GRID_VERSION):
+    return _digest({"grid_version": grid_version, "manifest_version": MANIFEST_VERSION,
                    "tasks": [{"run_id": t.run_id, "scientific_fingerprint": t.fingerprint} for t in tasks]})
 
 
@@ -137,9 +139,10 @@ class Manifest:
     tasks: tuple[Task, ...]
     seeds: tuple[int, ...]
     grid_id: str
+    grid_version: str = GRID_VERSION
 
     def to_dict(self):
-        return _sealed({"format_version": MANIFEST_VERSION, "kind": "full", "grid_version": GRID_VERSION,
+        return _sealed({"format_version": MANIFEST_VERSION, "kind": "full", "grid_version": self.grid_version,
                         "grid_id": self.grid_id, "seeds": list(self.seeds),
                         "tasks": [task.to_dict() for task in self.tasks]})
 
@@ -161,17 +164,26 @@ def manifest_from_dict(document) -> Manifest:
     document = _exact(document, FULL_KEYS, "full manifest")
     _same(document["format_version"], MANIFEST_VERSION, "manifest format version (no implicit migration)")
     _same(document["kind"], "full", "manifest kind")
-    _same(document["grid_version"], GRID_VERSION, "grid version")
+    version = document["grid_version"]
+    if version not in (GRID_VERSION, MOBILE_GRID_VERSION):
+        raise ManifestError("Unknown grid version")
     _check_seal(document)
     seeds = seed_plan(document["seeds"])
+    candidate = version == MOBILE_GRID_VERSION
+    if candidate:
+        _same(seeds, [0, 1, 2], "candidate actual seeds")
+    ordered = ([(1, "cifar10", "mobilenetv3_large", alpha, seed)
+                for alpha in ALPHAS for seed in seeds] if candidate else list(combinations(seeds)))
     rows = document["tasks"]
-    if type(rows) is not list or len(rows) != TOTAL_RUNS:
-        raise ManifestError(f"Full manifest requires exactly {TOTAL_RUNS} tasks")
+    if type(rows) is not list or len(rows) != len(ordered):
+        raise ManifestError(f"Full manifest requires exactly {len(ordered)} tasks")
     tasks, ids, recipes, dataset_data = [], set(), {}, {}
-    for index, (row, combo) in enumerate(zip(rows, combinations(seeds))):
+    for index, (row, combo) in enumerate(zip(rows, ordered)):
         _exact(row, TASK_KEYS, f"task {index}")
         phase, dataset, architecture, alpha, seed = combo
         config = RunConfig(row["config"])
+        _same(config.scientific["specification_version"],
+              MOBILE_EPSILON_PROFILE if candidate else SPECIFICATION_VERSION, "manifest/profile binding")
         config.require_research_ready()
         if config.execution["storage"]["split_file"] is None:
             raise ManifestError(f"Task {index}: execution.storage.split_file requires finalized preparation")
@@ -196,8 +208,8 @@ def manifest_from_dict(document) -> Manifest:
                   dataset_data[dataset], f"shared prepared data for {dataset}")
         dataset_data[dataset] = {"data": config.scientific["data"], "prepared": task.prepared_data}
         tasks.append(task)
-    _same(document["grid_id"], _grid_id(tasks), "scientific grid identity")
-    return Manifest(tuple(tasks), tuple(seeds), document["grid_id"])
+    _same(document["grid_id"], _grid_id(tasks, version), "scientific grid identity")
+    return Manifest(tuple(tasks), tuple(seeds), document["grid_id"], version)
 
 
 def load_manifest(path) -> Manifest:
@@ -273,11 +285,14 @@ def select_task(manifest: Manifest, *, global_index=None, phase=None, phase_inde
         if len(matches) != 1:
             raise ManifestError("Unknown or ambiguous run ID")
         return matches[0]
-    index, size = (global_index, TOTAL_RUNS) if global_index is not None else (phase_index, PHASE_SIZE)
+    if phase_index is not None:
+        require_phase(phase)
+    phase_tasks = tuple(t for t in manifest.tasks if t.phase == phase)
+    index, size = (global_index, len(manifest.tasks)) if global_index is not None else (phase_index, len(phase_tasks))
     if type(index) is not int or not 0 <= index < size:
         raise ManifestError(f"Task index must be an integer in [0, {size})")
     if phase_index is not None:
-        index += (require_phase(phase) - 1) * PHASE_SIZE
+        return phase_tasks[index]
     return manifest.tasks[index]
 
 
@@ -358,7 +373,7 @@ def save_manifest_document(path, document: dict, *, parent: Manifest, replace: b
 def evaluation_plan(manifest):
     """Logical slots, no fabricated checkpoint digests or scheduler job grouping."""
     from .evaluation_protocol import evaluation_protocol, prescribed_slots
-    from .spec import TOTAL_EVALUATION_SLOTS, EVALUATION_SLOTS_PER_CHECKPOINT, EVALUATION_PROTOCOL_VERSION
+    from .spec import EVALUATION_SLOTS_PER_CHECKPOINT, EVALUATION_PROTOCOL_VERSION
     manifest = manifest_from_dict(manifest.to_dict())
     rows = []
     for task in manifest.tasks:
@@ -372,7 +387,7 @@ def evaluation_plan(manifest):
                        **slot.to_dict()} for index, slot in enumerate(prescribed_slots())]})
     return {"evaluation_plan_version": 1, "parent_grid_id": manifest.grid_id,
         "parent_document_sha256": manifest.document_sha256, "protocol_version": EVALUATION_PROTOCOL_VERSION,
-        "training_tasks": len(manifest.tasks), "logical_evaluation_slots": TOTAL_EVALUATION_SLOTS,
+        "training_tasks": len(manifest.tasks), "logical_evaluation_slots": len(manifest.tasks) * EVALUATION_SLOTS_PER_CHECKPOINT,
         "job_grouping": "Step 7; logical slots are not job counts", "tasks": rows}
 
 

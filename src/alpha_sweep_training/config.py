@@ -190,7 +190,12 @@ def _validate(document: dict) -> None:
         if science["training_seed"] is not None and science["training_seed"] not in seeds:
             raise ConfigError("scientific.training_seed: must belong to scientific.training_seeds")
 
-    expected = default_document(dataset, architecture)["scientific"]
+    from .spec import SPECIFICATION_VERSIONS, MOBILE_EPSILON_PROFILE
+    profile = _choice(science["specification_version"], SPECIFICATION_VERSIONS,
+                      "scientific.specification_version")
+    if profile == MOBILE_EPSILON_PROFILE and (dataset, architecture) != ("cifar10", "mobilenetv3_large"):
+        raise ConfigError("The epsilon candidate supports only CIFAR-10 MobileNetV3-Large")
+    expected = default_document(dataset, architecture, profile)["scientific"]
     # Everything outside this explicit list is fixed by main-v1, including budget,
     # full split sizes, classifier shape, perturbation, and optimizer-specific fields.
     for key in ("specification_version", "model", "optimizer", "perturbation", "evaluation"):
@@ -250,6 +255,15 @@ def _validate(document: dict) -> None:
     for key in ("allow_tf32", "deterministic_algorithms", "cudnn_deterministic", "cudnn_benchmark"):
         if precision[key] is not None and type(precision[key]) is not bool:
             raise ConfigError(f"scientific.precision.{key}: expected bool or null")
+
+    if profile == MOBILE_EPSILON_PROFILE:
+        _fixed(science["training_seeds"], [0, 1, 2], "candidate training seeds")
+        for key, value in {"drop_last": False, "warmup_start_factor": 0.01,
+                           "cosine_min_lr": 0.0, "scheduler_interval": "epoch"}.items():
+            _fixed(training[key], value, f"candidate training.{key}")
+        _fixed(precision, {"mode": "amp_bfloat16", "float32_matmul_precision": "highest",
+                           "allow_tf32": False, "deterministic_algorithms": True,
+                           "cudnn_deterministic": True, "cudnn_benchmark": False}, "candidate precision")
 
     execution = document["execution"]
     storage = execution["storage"]
@@ -455,14 +469,19 @@ def from_declaration(*layers: Mapping, overrides: Mapping[str, Any] | None = Non
     for layer in declarations:
         if "scientific" in layer:
             scientific = _mapping(layer["scientific"], "scientific")
-            for key in ("dataset", "architecture"):
+            for key in ("dataset", "architecture", "specification_version"):
                 if key in scientific:
                     selectors[key] = scientific[key]
-    if set(selectors) != {"dataset", "architecture"}:
+    if not {"dataset", "architecture"} <= set(selectors):
         raise ConfigError("declarations must select scientific.dataset and scientific.architecture")
     dataset = _choice(selectors["dataset"], DATASETS, "scientific.dataset")
     architecture = _choice(selectors["architecture"], ARCHITECTURES, "scientific.architecture")
-    document = default_document(dataset, architecture)
+    from .spec import SPECIFICATION_VERSION, SPECIFICATION_VERSIONS, MOBILE_EPSILON_PROFILE
+    profile = _choice(selectors.get("specification_version", SPECIFICATION_VERSION), SPECIFICATION_VERSIONS,
+                      "scientific.specification_version")
+    if profile == MOBILE_EPSILON_PROFILE and (dataset, architecture) != ("cifar10", "mobilenetv3_large"):
+        raise ConfigError("The epsilon candidate supports only CIFAR-10 MobileNetV3-Large")
+    document = default_document(dataset, architecture, profile)
     shape = deepcopy(document)
     for layer in declarations:
         _merge(document, layer, shape)

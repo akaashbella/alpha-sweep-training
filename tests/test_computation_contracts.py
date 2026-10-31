@@ -422,6 +422,7 @@ class CudaContracts(ReferenceChecks):
         baseline = CleanStateBaseline(model)
         runtime = SimpleNamespace(device=self.device, evaluation_only=True, require_active=lambda config: None)
         inputs, _ = self.inputs()
+        @t.inference_mode()
         def whole_pass(_model, loader, *, forward, **kwargs):
             model.eval()
             first = forward(inputs).detach().clone()

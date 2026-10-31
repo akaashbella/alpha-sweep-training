@@ -31,7 +31,7 @@ def main():
     # Explicit classes, never discovery of CudaContracts or any research command.
     suite = unittest.defaultTestLoader.loadTestsFromNames([
         "test_computation_contracts.CpuContracts", "test_diagnostic_contracts.DiagnosticContracts",
-        "test_diagnostic_integration.DiagnosticRunnerWiring"])
+        "test_diagnostic_integration.DiagnosticRunnerWiring", "test_mobile_candidate.CandidateContracts"])
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     return 0 if result.wasSuccessful() else 1
 

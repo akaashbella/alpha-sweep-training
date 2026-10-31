@@ -1,0 +1,34 @@
+# Review declaration, layered only over the exact audited original seed-2 saved
+# config. The mobile_candidate build CLI copies its prepared data unchanged and
+# emits three resolved JSON configs plus all thirty tasks in study.json.
+schema_version: 4
+scientific:
+  specification_version: cifar10-mobile-eps0316-v1
+  dataset: cifar10
+  architecture: mobilenetv3_large
+  alpha: 0.0
+  training_seed: 0
+  training_seeds: [0, 1, 2]
+  optimizer:
+    name: rmsprop
+    learning_rate: 0.01
+    momentum: 0.9
+    rmsprop_alpha: 0.9
+    epsilon: 0.0316
+    weight_decay: 0.00001
+    betas: null
+  training:
+    epochs: 200
+    batch_size: 128
+    warmup_epochs: 5
+    warmup_start_factor: 0.01
+    cosine_min_lr: 0.0
+    scheduler_interval: epoch
+    drop_last: false
+  precision:
+    mode: amp_bfloat16
+    float32_matmul_precision: highest
+    allow_tf32: false
+    deterministic_algorithms: true
+    cudnn_deterministic: true
+    cudnn_benchmark: false

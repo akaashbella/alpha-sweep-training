@@ -342,3 +342,11 @@ full-manifest authoritative collection, complete prescribed summaries, validatio
 co-winners, paired descriptions, derived-output inspection and headless figures.
 It reads stored historical provenance and never uses allocation/CSV outcomes as
 science authority. See [results-and-figures.md](results-and-figures.md).
+
+## Separate thirty-run MobileNet candidate
+
+The narrow `cifar10-mobile-eps0316-30-tasks-v1` grid requires ten alphas × actual
+seeds 0/1/2 for the explicit candidate profile only. Legacy full-grid validation
+remains strict at 240 main-v1 tasks. The [candidate handoff](mobile-epsilon-candidate.md)
+documents its direct three-member pilot, native execution and coverage, disjoint
+ownership, and rejection by the main-v1 managed scheduling/reporting contracts.

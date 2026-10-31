@@ -4,6 +4,8 @@ from copy import deepcopy
 
 SCHEMA_VERSION = 4
 SPECIFICATION_VERSION = "main-v1"
+MOBILE_EPSILON_PROFILE = "cifar10-mobile-eps0316-v1"
+SPECIFICATION_VERSIONS = (SPECIFICATION_VERSION, MOBILE_EPSILON_PROFILE)
 FINGERPRINT_VERSION = 4
 TRAINING_ENGINE_VERSION = "functional-fp32-training-v1"
 RUNTIME_RANDOMNESS_VERSION = "sha256-runtime-streams-v1"
@@ -69,17 +71,29 @@ _OPTIMIZER_RECIPES = {
 }
 
 
-def optimizer_recipe(architecture: str) -> dict:
+def optimizer_recipe(architecture: str, specification_version: str = SPECIFICATION_VERSION) -> dict:
     """Return an independent declaration; this does not construct an optimizer."""
-    return deepcopy(_OPTIMIZER_RECIPES[architecture])
+    if specification_version not in SPECIFICATION_VERSIONS:
+        raise ValueError("Unknown scientific specification profile")
+    recipe = deepcopy(_OPTIMIZER_RECIPES[architecture])
+    if specification_version == MOBILE_EPSILON_PROFILE:
+        if architecture != "mobilenetv3_large":
+            raise ValueError("The epsilon candidate supports only MobileNetV3-Large")
+        recipe["epsilon"] = 0.0316
+    return recipe
 
 
-def default_document(dataset: str, architecture: str) -> dict:
+def default_document(dataset: str, architecture: str,
+                     specification_version: str = SPECIFICATION_VERSION) -> dict:
     """Build fixed research settings while leaving undecided settings explicit."""
+    if specification_version not in SPECIFICATION_VERSIONS:
+        raise ValueError("Unknown scientific specification profile")
+    if specification_version == MOBILE_EPSILON_PROFILE and (dataset, architecture) != ("cifar10", "mobilenetv3_large"):
+        raise ValueError("The epsilon candidate supports only CIFAR-10 MobileNetV3-Large")
     return {
         "schema_version": SCHEMA_VERSION,
         "scientific": {
-            "specification_version": SPECIFICATION_VERSION,
+            "specification_version": specification_version,
             "dataset": dataset,
             "architecture": architecture,
             "alpha": 0.0,
@@ -104,7 +118,7 @@ def default_document(dataset: str, architecture: str) -> dict:
                 "num_classes": DATASETS[dataset], "pretrained": False,
                 "stem_policy": "cifar32", "preserve_remaining_structure": True,
             },
-            "optimizer": optimizer_recipe(architecture),
+            "optimizer": optimizer_recipe(architecture, specification_version),
             "training": {
                 "engine_version": TRAINING_ENGINE_VERSION,
                 "randomness_version": RUNTIME_RANDOMNESS_VERSION,

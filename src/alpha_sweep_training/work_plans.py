@@ -20,6 +20,9 @@ def check_seal(document):
 
 
 def workflow_identity(manifest):
+    from .manifests import GRID_VERSION
+    if getattr(manifest, "grid_version", GRID_VERSION) != GRID_VERSION:
+        raise WorkflowError("Candidate pilots use the explicit direct pilot runner, not the main-v1 managed workflow")
     return content_identity({"workflow_version": 1, "grid_id": manifest.grid_id,
                              "manifest_document_sha256": manifest.document_sha256})[7:]
 
@@ -83,6 +86,7 @@ def _build_work_plan(manifest, policy, *, manifest_path, state=None, retry_run_i
     from .execution_provenance import collect_provenance, collect_launch_inputs
     from .evaluation_protocol import prescribed_slots
     manifest = manifest_from_dict(manifest.to_dict())
+    workflow_identity(manifest)  # Reject candidate scheduling before provenance/inspection.
     policy.require_ready()
     state = state or {"waves": [], "revision": 0}
     retries = list(retry_run_ids)

@@ -198,6 +198,9 @@ def collect_results(manifest, *, base_dir, source_root, overrides=None, evaluati
     from .checkpoint_io import ArtifactReference, read_document
     from .checkpoint_journal import read_committed
     manifest = manifest_from_dict(manifest.to_dict())
+    from .manifests import GRID_VERSION
+    if manifest.grid_version != GRID_VERSION:
+        raise ReportingError("The main-v1 240/6720 reporting contract is unchanged; use mobile_candidate report for pilot validation")
     training, evaluation, epochs, layers, diagnostics, references = [], [], [], [], [], []
     began = utc_now()
     provenance = reporting_provenance(source_root, "collector")

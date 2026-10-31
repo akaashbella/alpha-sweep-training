@@ -234,3 +234,10 @@ builders, explicit fresh/continuation initialization and actual loader counts.
 Step 7 now supplies source-only Slurm/signals through
 [slurm-workflow.md](slurm-workflow.md). Step 8 now supplies source-only
 [results/figures](results-and-figures.md); HPC runtime checks remain deferred.
+
+## Opt-in MobileNet epsilon candidate
+
+The native optimizer builder also honors the explicit `cifar10-mobile-eps0316-v1`
+scientific profile, using RMSprop epsilon .0316 for CIFAR-10 MobileNet only. All
+main-v1 recipes retain their values. See [the candidate handoff](mobile-epsilon-candidate.md)
+for unchanged single-group ownership, schedule, checkpoint and precision contracts.

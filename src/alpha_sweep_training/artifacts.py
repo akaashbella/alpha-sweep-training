@@ -97,6 +97,14 @@ def resolve_run_paths(config: RunConfig, base_dir: str | Path) -> RunPaths:
     config = effective_storage_config(config, base_dir)
     run_id = run_identity(config)
     storage = config.execution["storage"]
+    from .spec import SPECIFICATION_VERSION
+    profile = config.scientific["specification_version"]
+    # Historical roots/names are byte-for-byte unchanged. Every candidate writer
+    # gets a profile directory even when an execution override selects an old root.
+    if profile != SPECIFICATION_VERSION:
+        for key in ("output_root", "checkpoint_root", "result_root", "log_root"):
+            if storage[key] is not None:
+                storage[key] = str(Path(storage[key]) / profile)
     metadata = Path(storage["output_root"]) / run_id
     paths = RunPaths(
         metadata=metadata,
@@ -155,6 +163,18 @@ def _check_existing(paths: RunPaths, config: RunConfig, operation: RunOperation,
             raise RunDirectoryError("Existing artifacts require explicit continue or overwrite: " + ", ".join(existing))
         return
     if operation == "overwrite":
+        # Archival overwrite cannot adopt artifacts from another scientific
+        # profile, even if someone manually copied them into this namespace.
+        from .spec import SPECIFICATION_VERSION
+        expected_profile = config.scientific["specification_version"]
+        markers = [paths.metadata / "run_metadata.json",
+                   *(p / ".run_owner.json" for p in paths.directories() if p != paths.metadata)]
+        for marker in markers:
+            if marker.exists() or _is_link(marker):
+                _require_plain_file(marker)
+                record = read_json(marker)
+                if not isinstance(record, dict) or record.get("specification_version", SPECIFICATION_VERSION) != expected_profile:
+                    raise RunDirectoryError("Cross-profile archival overwrite is forbidden")
         # No compatibility requirement: the explicit selected identity is checked
         # by open_run, and all occupied roots will be archived before fresh writes.
         if not any(path.exists() for path in paths.directories()):

@@ -339,3 +339,11 @@ never edit the checksummed original prepared YAML. Source inventory v2 and exter
 launch pins change operational provenance only, not schema-4 fingerprints.
 The [end-to-end guide](operating-guide.md) contains the full input/verification
 register and compatibility handoff. All later execution requires separate authorization.
+
+## Separate MobileNet epsilon candidate
+
+`cifar10-mobile-eps0316-v1` uses the existing scientific specification-version field
+and hash schema; main-v1 declarations and hashes retain their historical meaning.
+Only CIFAR-10 MobileNet accepts this profile. See [its declaration, namespace guards
+and frozen pilot preparation](mobile-epsilon-candidate.md). This does not change
+the main-v1 defaults described in this guide.

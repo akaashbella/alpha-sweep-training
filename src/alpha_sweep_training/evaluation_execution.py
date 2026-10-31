@@ -13,7 +13,7 @@ from .evaluation_persistence import (PRESERVATION, SweepFinalizationDeferred,
 from .evaluation_coverage import collect_evaluation_coverage, observe_evaluation_slot
 from .execution_provenance import collect_provenance
 from .manifests import manifest_from_dict, select_task
-from .spec import TOTAL_EVALUATION_SLOTS, EVALUATION_SLOTS_PER_CHECKPOINT
+from .spec import EVALUATION_SLOTS_PER_CHECKPOINT
 
 
 @dataclass(frozen=True)
@@ -60,7 +60,8 @@ def collect_experiment_coverage(manifest, *, base_dir, overrides=None, evaluatio
         if row["evaluation"] is None:
             row["expected_unbound_slots"] = [slot.to_dict() for slot in prescribed_slots()]
         observations.append(row)
-    evaluation_counts = {"expected": TOTAL_EVALUATION_SLOTS, "successful": 0, "failed": 0,
+    expected_slots = len(manifest.tasks) * EVALUATION_SLOTS_PER_CHECKPOINT
+    evaluation_counts = {"expected": expected_slots, "successful": 0, "failed": 0,
         "interrupted": 0, "pending": 0, "locked": 0, "incompatible": 0, "inspection_error": 0,
         "partial": 0, "unstable": 0, "unacknowledged_failures": 0,
         "clean_points_successful": 0, "positive_realizations_successful": 0}
@@ -75,7 +76,7 @@ def collect_experiment_coverage(manifest, *, base_dir, overrides=None, evaluatio
             evaluation_counts["clean_points_successful"] += int(coverage["clean_point_successful"])
             evaluation_counts["positive_realizations_successful"] += coverage["positive_realizations_successful"]
     return {"experiment_coverage_version": 1, "grid_id": manifest.grid_id, "training": training,
-        "expected_evaluation_slots": TOTAL_EVALUATION_SLOTS, "evaluation_counts": evaluation_counts,
+        "expected_evaluation_slots": expected_slots, "evaluation_counts": evaluation_counts,
         "evaluation_eligible_checkpoints": sum(row["evaluation_eligible"] for row in observations),
         "robustness_completed_checkpoints": sum(row["evaluation"] is not None and
             row["evaluation"]["robustness_completed"] for row in observations), "checkpoints": observations}

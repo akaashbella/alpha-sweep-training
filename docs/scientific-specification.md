@@ -1,5 +1,9 @@
 # Main experiment: main-v1
 
+The separately identified, opt-in CIFAR-10 MobileNet epsilon candidate is specified
+in [the candidate handoff](mobile-epsilon-candidate.md). It preserves this main-v1
+contract and has a distinct thirty-run study; adoption awaits its three-seed pilot.
+
 This is the authoritative scientific specification. Schema version 4 and
 `src/alpha_sweep_training/spec.py` implement its current configuration contract.
 Changes to the scientific specification require explicit agreement and a

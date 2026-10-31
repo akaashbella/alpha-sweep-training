@@ -6,7 +6,7 @@ import json
 import math
 
 from .config import ConfigError, RunConfig
-from .spec import FINGERPRINT_VERSION, SCHEMA_VERSION
+from .spec import FINGERPRINT_VERSION, SCHEMA_VERSION, SPECIFICATION_VERSION
 
 
 def canonical_alpha(alpha: int | float) -> str:
@@ -32,10 +32,12 @@ def run_identity(config: RunConfig) -> str:
     """A research run is one dataset/architecture/alpha/training-seed tuple."""
     config.require_research_ready()
     science = config.scientific
-    return (
+    name = (
         f"{science['dataset']}__{science['architecture']}"
         f"__alpha-{canonical_alpha(science['alpha'])}__seed-{science['training_seed']}"
     )
+    profile = science["specification_version"]
+    return name if profile == SPECIFICATION_VERSION else f"{profile}__{name}"
 
 
 def scientific_fingerprint(config: RunConfig) -> str:

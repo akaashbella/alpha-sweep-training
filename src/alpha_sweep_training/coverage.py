@@ -231,8 +231,11 @@ def collect_coverage(manifest: Manifest, *, base_dir, overrides=None) -> dict:
             inspection.progress(f"Training authority {index}/{len(manifest.tasks)}: {task.run_id}")
         rows.append(inspect_task(task, base_dir=base_dir, overrides=overrides))
     rows = tuple(rows)
+    from .manifests import MOBILE_GRID_VERSION
+    datasets = ("cifar10",) if manifest.grid_version == MOBILE_GRID_VERSION else DATASETS
+    architectures = ("mobilenetv3_large",) if manifest.grid_version == MOBILE_GRID_VERSION else ARCHITECTURES
     phases = []
-    for phase, dataset in enumerate(DATASETS, start=1):
+    for phase, dataset in enumerate(datasets, start=1):
         selected = tuple(r for r in rows if r.phase == phase)
         counts = _counts(selected)
         phases.append({"phase": phase, "dataset": dataset, **counts,
@@ -244,9 +247,9 @@ def collect_coverage(manifest: Manifest, *, base_dir, overrides=None) -> dict:
                 (r.condition == "ok" and not r.training_complete and not r.terminal_numerical and not r.execution_failed)]})
     return {"coverage_version": 2, "lifecycle": "training", "grid_id": manifest.grid_id, "manifest_document_sha256": manifest.document_sha256,
         "counts": _counts(rows), "phases": phases,
-        "datasets": {name: _counts(tuple(r for r in rows if r.dataset == name)) for name in DATASETS},
-        "architectures": {name: _counts(tuple(r for r in rows if r.architecture == name)) for name in ARCHITECTURES},
+        "datasets": {name: _counts(tuple(r for r in rows if r.dataset == name)) for name in datasets},
+        "architectures": {name: _counts(tuple(r for r in rows if r.architecture == name)) for name in architectures},
         "dataset_architectures": {dataset: {architecture: _counts(tuple(r for r in rows
-            if r.dataset == dataset and r.architecture == architecture)) for architecture in ARCHITECTURES} for dataset in DATASETS},
+            if r.dataset == dataset and r.architecture == architecture)) for architecture in architectures} for dataset in datasets},
         "tasks": [r.to_dict() for r in rows],
         "observation_semantics": "Independent stable task observations, not an atomic grid snapshot; historical provenance, no repair"}
