@@ -10,7 +10,7 @@ from contextlib import ExitStack
 from copy import deepcopy
 from dataclasses import dataclass
 import csv
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import importlib.util
 import io
 import json
@@ -56,8 +56,20 @@ class OperatorCase(unittest.TestCase):
     def setUp(self):
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
+        self.progress = self.stack.enter_context(patch("sys.stderr", new_callable=io.StringIO))
         self.root = Path(self.stack.enter_context(tempfile.TemporaryDirectory()))
         self.stack.enter_context(patch.object(op.subprocess, "run", side_effect=AssertionError("External command forbidden")))
+        original_command = op.command
+        self.resource_outputs = {
+            "assoc": "fixture|fixture-user||fixture|fixture",
+            "qos": "fixture|01:00:00",
+            "partition": "PartitionName=dgxh State=UP AllowAccounts=ALL AllowQos=ALL MaxTime=01:00:00",
+            "node": "NodeName=fixture-node State=IDLE CPUTot=64 RealMemory=128000 Partitions=dgxh Gres=gpu:h100:8"}
+        def command_boundary(argv, **kwargs):
+            if argv[0] in ("sacctmgr", "scontrol"):
+                return self.resource_outputs[argv[3]]
+            return original_command(argv, **kwargs)
+        self.stack.enter_context(patch.object(op, "command", side_effect=command_boundary))
         # Windows cannot exercise POSIX directory durability. File writes,
         # hard-link publication and exclusivity are still real temporary I/O.
         if os.name != "posix":
@@ -66,6 +78,8 @@ class OperatorCase(unittest.TestCase):
                            "OPS": self.root / "operations", "EVALUATIONS": self.root / "evaluations",
                            "OLD_OPERATOR": self.root / "old-operator", "OLD_PLAN": self.root / "old-plan",
                            "EVIDENCE": self.root / "evidence", "HOME": self.root / "bundle",
+                           "V1_OPERATOR": self.root / "owned-v1", "V1_OPS": self.root / "legacy-operations",
+                           "FAILED_INSPECTION": self.root / "failed-inspection",
                            "PYTHON": Path(sys.executable).absolute()}.items():
             self.stack.enter_context(patch.object(op, key, value))
         op.HOME.mkdir()
@@ -271,7 +285,7 @@ class OperatorCase(unittest.TestCase):
         (base / "attempts/attempt.json").write_text(json.dumps({"seed": LARGE_SEED}), encoding="utf-8")
         self.coverages[index]["slots"][slot_index]["orphan_failures"] = [{"status": "failed_execution", "sha256": "orphan"}]
 
-    def prepare_plan(self):
+    def prepare_request(self):
         op.own_bundle()
         native, _, _ = op.native_inputs()
         export = self.root / "bindings.json"
@@ -290,7 +304,12 @@ class OperatorCase(unittest.TestCase):
                       "exclusive_project_window": True, "wall_time": "00:30:00", "evidence_files": evidence}
         self.inspection_path = self.root / "inspection.json"
         self.inspection_path.write_text(json.dumps(inspection), encoding="utf-8")
-        self.plan = op.prepare(NS(export_bindings=str(export), inspection=str(self.inspection_path)))
+        self.export_path = export
+
+    def prepare_plan(self):
+        self.prepare_request()
+        with patch.object(op, "queue", return_value=[]):
+            self.plan = op.prepare(NS(export_bindings=str(self.export_path), inspection=str(self.inspection_path)))
         return self.plan
 
     def wave(self, name="first", selected=None, *, acknowledged=True):
@@ -299,7 +318,7 @@ class OperatorCase(unittest.TestCase):
         wave.mkdir()
         for part in ("logs", "claims", "outcomes"):
             (wave / part).mkdir()
-        observed = op.inspection(self.inspection_path, fresh=True)
+        observed = op.inspection(self.plan["inspection"]["path"], fresh=True)
         intent = op.seal({"version": op.VERSION, "plan_sha256": self.plan["document_sha256"], "wave": name,
                           "submitter": deepcopy(self.plan["submitter"]),
                           "inspection": observed, "indices": selected, "retry_failed": False, "reason": "CPU fixture",
@@ -706,10 +725,12 @@ class WiringChecks(OperatorCase):
         self.assertFalse((op.OPS / "waves/first/ack.json").exists())
         self.assertTrue((op.OPS / "waves/first/intent.json").exists())
 
-    def test_preview_never_writes_or_calls_sbatch(self):
+    def test_preview_never_writes_intent_or_calls_sbatch(self):
         self.prepare_plan()
-        result = op.preview_or_submit(self.submit_args(execute=False))
+        with patch.object(op, "queue", return_value=[]):
+            result = op.preview_or_submit(self.submit_args(execute=False))
         self.assertFalse(result["submission_performed"])
+        self.assertTrue(Path(result["inspection"]["path"]).is_file())
         self.assertEqual(list((op.OPS / "waves").iterdir()), [])
 
     def test_failed_slots_require_explicit_audited_retry(self):
@@ -717,7 +738,8 @@ class WiringChecks(OperatorCase):
         self.coverages[0]["counts"]["failed"] = 1
         with self.assertRaisesRegex(ValueError, "explicit audited retry"):
             op.preview_or_submit(self.submit_args(execute=False))
-        result = op.preview_or_submit(self.submit_args(execute=False, retry_failed=True, reason="Reviewed fixture failure"))
+        with patch.object(op, "queue", return_value=[]):
+            result = op.preview_or_submit(self.submit_args(execute=False, retry_failed=True, reason="Reviewed fixture failure"))
         self.assertTrue(result["retry_failed"])
 
     def test_unreserved_submitting_user_work_blocks_before_intent(self):
@@ -951,3 +973,231 @@ class QueueScopeChecks(OperatorCase):
             record = op.acknowledge(self.plan, wave, "12345", "Reviewed exact intent", evidence)
         self.assertEqual(record["submitter"], self.submitter)
         self.assertFalse((wave / "settled.json").exists())
+
+
+class FreshnessChecks(OperatorCase):
+    def clock(self):
+        base = op.utc_now()
+        clock = NS(elapsed=0.)
+        clock.advance = lambda seconds: setattr(clock, "elapsed", clock.elapsed + seconds)
+        clock.now = lambda: base + timedelta(seconds=clock.elapsed)
+        self.stack.enter_context(patch.object(op, "utc_now", side_effect=clock.now))
+        self.stack.enter_context(patch.object(op.time, "monotonic", side_effect=lambda: clock.elapsed))
+        return clock
+
+    def prepare_args(self):
+        return NS(export_bindings=str(self.export_path), inspection=str(self.inspection_path))
+
+    def slow_inputs(self, clock, *, after=None):
+        original = op.native_inputs
+        def verify():
+            result = original()
+            clock.advance(1800)
+            if after is not None:
+                after()
+            return result
+        return patch.object(op, "native_inputs", side_effect=verify)
+
+    def test_prepare_collects_new_evidence_after_thirty_minute_verification(self):
+        self.prepare_request()
+        before = self.inspection_path.read_bytes()
+        clock = self.clock()
+        with self.slow_inputs(clock), patch.object(op, "queue", return_value=[]), patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            plan = op.prepare(self.prepare_args())
+        self.assertEqual(clock.elapsed, 1800)
+        self.assertEqual(plan["inspection"]["record"]["inspected_at_utc"], clock.now().isoformat())
+        self.assertEqual(self.inspection_path.read_bytes(), before)
+        self.assertNotEqual(plan["inspection"]["path"], str(self.inspection_path))
+        self.assertTrue(Path(plan["inspection"]["collection"]["path"]).is_file())
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("done in 1800.0s", self.progress.getvalue())
+        self.assertIn("checkpoint 30/30", self.progress.getvalue())
+        self.assertIn("fresh resource associations", self.progress.getvalue())
+
+    def test_submit_checks_bindings_under_lock_then_recollects_fresh_resources(self):
+        self.prepare_plan()
+        clock = self.clock()
+        queries = []
+        def current_queue(submitter):
+            self.assertTrue((op.OPS / ".controller.lock").is_file())
+            queries.append(clock.elapsed)
+            return []
+        def sbatch(argv, **kwargs):
+            self.assertEqual(argv[0], "sbatch")
+            intent = op.read(op.OPS / "waves/first/intent.json")
+            self.assertEqual(intent["inspection"]["record"]["inspected_at_utc"], clock.now().isoformat())
+            return NS(returncode=0, stdout="12345\n", stderr="")
+        with self.slow_inputs(clock) as verifier, patch.object(op, "queue", side_effect=current_queue), \
+             patch.object(op.subprocess, "run", side_effect=sbatch) as submission:
+            result = op.preview_or_submit(self.submit_args())
+        self.assertEqual(verifier.call_count, 1)
+        self.assertEqual(queries, [1800])
+        self.assertEqual(submission.call_count, 1)
+        self.assertEqual(result["array_job_id"], "12345")
+
+    def test_stale_collected_snapshot_is_rejected(self):
+        self.prepare_plan()
+        clock = self.clock()
+        clock.advance(901)
+        with self.assertRaisesRegex(ValueError, "15 minutes"):
+            op.inspection(self.plan["inspection"]["path"], fresh=True)
+
+    def test_retimestamps_cannot_make_old_resource_receipts_fresh(self):
+        self.prepare_plan()
+        clock = self.clock()
+        clock.advance(1800)
+        path = Path(self.plan["inspection"]["path"])
+        value = op.read(path)
+        value["inspected_at_utc"] = clock.now().isoformat()
+        path.write_text(op.canonical(value), encoding="utf-8")
+        collection_path = path.parent / "COLLECTION.json"
+        collection = op.read(collection_path)
+        collection.pop("document_sha256")
+        collection.update(started_at_utc=clock.now().isoformat(), finished_at_utc=clock.now().isoformat(),
+                          inspection_sha256=op.digest(path))
+        collection_path.write_text(op.canonical(op.seal(collection)), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "predates collection"):
+            op.inspection(path, fresh=True)
+
+    def test_resource_collection_itself_cannot_take_more_than_fifteen_minutes(self):
+        self.prepare_request()
+        clock = self.clock()
+        boundary = op.command.side_effect
+        def delayed_query(argv, **kwargs):
+            result = boundary(argv, **kwargs)
+            if argv[0] == "scontrol" and argv[3] == "node":
+                clock.advance(901)
+            return result
+        with patch.object(op.command, "side_effect", delayed_query), patch.object(op, "queue", return_value=[]):
+            with self.assertRaisesRegex(ValueError, "15 minutes"):
+                op.prepare(self.prepare_args())
+        self.assertFalse(op.OPS.exists())
+        self.assertTrue(list(self.root.glob("mobile-all30-eval-resources-v2-*/node.receipt.json")))
+
+    def test_delay_after_intent_blocks_sbatch_and_preserves_reservation(self):
+        self.prepare_plan()
+        clock = self.clock()
+        original = op.publish
+        def delayed_publication(path, value):
+            original(path, value)
+            if Path(path).name == "intent.json":
+                clock.advance(901)
+        with patch.object(op, "publish", side_effect=delayed_publication), patch.object(op, "queue", return_value=[]), \
+             patch.object(op.subprocess, "run") as submission:
+            with self.assertRaisesRegex(ValueError, "15 minutes"):
+                op.preview_or_submit(self.submit_args())
+            submission.assert_not_called()
+        self.assertTrue((op.OPS / "waves/first/intent.json").is_file())
+        self.assertFalse((op.OPS / "waves/first/ack.json").exists())
+        with self.assertRaisesRegex(ValueError, "unresolved"):
+            op.preview_or_submit(self.submit_args(wave="second"))
+
+    def test_current_account_qos_partition_and_node_changes_reject_without_retuning(self):
+        self.prepare_request()
+        original = deepcopy(self.resource_outputs)
+        changes = {"assoc": "other-account|fixture-user||fixture|fixture", "qos": "fixture|00:10:00",
+                   "partition": original["partition"].replace("AllowAccounts=ALL", "AllowAccounts=other"),
+                   "node": original["node"].replace("State=IDLE", "State=IDLE+DRAIN")}
+        for key, value in changes.items():
+            with self.subTest(resource=key):
+                self.resource_outputs.update(original)
+                self.resource_outputs[key] = value
+                with patch.object(op, "queue", return_value=[]):
+                    with self.assertRaises(ValueError):
+                        op.prepare(self.prepare_args())
+                self.assertFalse(op.OPS.exists())
+        self.assertTrue(list(self.root.glob("mobile-all30-eval-resources-v2-*/associations.receipt.json")))
+
+    def test_changed_explicit_resource_choices_are_not_silently_adopted(self):
+        self.prepare_plan()
+        request = op.read(self.inspection_path)
+        request["account"] = "other-account"
+        self.inspection_path.write_text(op.canonical(request), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "explicit frozen resource choices"):
+            op.preview_or_submit(self.submit_args())
+        self.assertEqual(list((op.OPS / "waves").iterdir()), [])
+
+    def test_identity_change_after_long_checks_rejects_before_collection(self):
+        self.prepare_request()
+        clock = self.clock()
+        def change_identity():
+            self.pwd.getpwuid.return_value = NS(pw_uid=24680, pw_name="other-user")
+            self.pwd.getpwnam.return_value = NS(pw_uid=24680, pw_name="other-user")
+        with self.slow_inputs(clock, after=change_identity), patch.object(op, "queue", return_value=[]):
+            with self.assertRaisesRegex(ValueError, "OS submitter identity"):
+                op.prepare(self.prepare_args())
+        self.assertFalse(op.OPS.exists())
+
+    def test_insufficient_current_reservations_reject_after_long_checks(self):
+        self.prepare_plan()
+        clock = self.clock()
+        with self.slow_inputs(clock), patch.object(op, "queue", return_value=[{"job": "other-owned-task"}]):
+            with self.assertRaisesRegex(ValueError, "exceeds reserved"):
+                op.preview_or_submit(self.submit_args())
+        self.assertEqual(list((op.OPS / "waves").iterdir()), [])
+
+    def test_existing_v1_bundle_and_failed_inspection_keep_their_bytes(self):
+        self.prepare_request()
+        op.V1_OPERATOR.mkdir()
+        (op.V1_OPERATOR / "BUNDLE_OWNER.json").write_bytes(b"existing owned v1 bytes")
+        op.FAILED_INSPECTION.mkdir()
+        (op.FAILED_INSPECTION / "inspection.json").write_bytes(b"old 23.7-minute inspection")
+        (op.FAILED_INSPECTION / "preparation-result.json").write_bytes(b"")
+        before = {p: p.read_bytes() for root in (op.V1_OPERATOR, op.FAILED_INSPECTION) for p in root.iterdir()}
+        with patch.object(op, "queue", return_value=[]):
+            plan = op.prepare(self.prepare_args())
+        self.assertEqual(before, {p: p.read_bytes() for p in before})
+        self.assertEqual(plan["version"], "mobile-all30-evaluation-operator-v2")
+        self.assertNotEqual(op.HOME, op.V1_OPERATOR)
+        self.plan = plan
+        report_path = self.root / "temporary-report" / "report.json"
+        report_path.parent.mkdir()
+        op.publish(report_path, self.collect())
+        for protected in (op.V1_OPERATOR, op.FAILED_INSPECTION):
+            with self.assertRaisesRegex(ValueError, "Namespace overlap"):
+                figures.main(["--report", str(report_path), "--output-dir", str(protected / "figures")])
+            self.assertFalse((protected / "figures").exists())
+        self.assertEqual(before, {p: p.read_bytes() for p in before})
+
+    def test_old_operational_evidence_cannot_be_bypassed_with_a_new_version(self):
+        self.prepare_request()
+        op.V1_OPS.mkdir()
+        evidence = op.V1_OPS / "intent.json"
+        evidence.write_bytes(b"uncertain historical submission")
+        with self.assertRaisesRegex(ValueError, "cross-version reservations"):
+            op.prepare(self.prepare_args())
+        self.assertEqual(evidence.read_bytes(), b"uncertain historical submission")
+        self.assertFalse(op.OPS.exists())
+
+    def test_mutated_collected_bytes_block_submission_without_erasing_intent(self):
+        self.prepare_plan()
+        original = op.publish
+        def mutate_after_intent(path, value):
+            original(path, value)
+            if Path(path).name == "intent.json":
+                Path(value["inspection"]["evidence"]["nodes"]["path"]).write_bytes(b"changed evidence")
+        with patch.object(op, "publish", side_effect=mutate_after_intent), patch.object(op, "queue", return_value=[]), \
+             patch.object(op.subprocess, "run") as submission:
+            with self.assertRaisesRegex(ValueError, "collected evidence bytes"):
+                op.preview_or_submit(self.submit_args())
+            submission.assert_not_called()
+        self.assertTrue((op.OPS / "waves/first/intent.json").is_file())
+
+    def test_final_snapshot_validation_delay_cannot_waive_freshness(self):
+        self.prepare_plan()
+        clock = self.clock()
+        original = op.digest
+        delayed = []
+        def slow_digest(path):
+            result = original(path)
+            if Path(path).name == "nodes.json" and (op.OPS / "waves/first/intent.json").exists() and not delayed:
+                delayed.append(True)
+                clock.advance(901)
+            return result
+        with patch.object(op, "digest", side_effect=slow_digest), patch.object(op, "queue", return_value=[]), \
+             patch.object(op.subprocess, "run") as submission:
+            with self.assertRaisesRegex(ValueError, "expired while validating"):
+                op.preview_or_submit(self.submit_args())
+            submission.assert_not_called()
+        self.assertTrue(delayed)
+        self.assertTrue((op.OPS / "waves/first/intent.json").exists())

@@ -5,7 +5,7 @@ storage and the frozen research interpreter are required for operational use.
 """
 
 import argparse
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -13,12 +13,14 @@ import os
 from pathlib import Path
 import re
 import shlex
+import shutil
 import socket
 import subprocess
 import sys
+import time
 import uuid
 
-VERSION = "mobile-all30-evaluation-operator-v1"
+VERSION = "mobile-all30-evaluation-operator-v2"
 COMMIT = "8010d07d9d1f0886ab1e180523f316623ef622a4"
 SOURCE_SHA = "a5726bac3f449455d36e2f53840f3e0fd77768a7ab2b989d2884da20f920005c"
 GRID = "2c0689e4aa3d0b6734323642a89dd7de809337caabcbe358ab600b7287a16167"
@@ -29,7 +31,10 @@ NATIVE = BASE / "alpha-sweep-mobile-eps0316"
 STUDY = BASE / "mobile-eps0316-v1"
 PYTHON = BASE / "alpha-sweep-training/.venv/bin/python"
 EVALUATIONS = BASE / "mobile-eps0316-evaluations-v1"
-OPS = BASE / "mobile-eps0316-evaluation-ops-v1"
+OPS = BASE / "mobile-eps0316-evaluation-ops-v2"
+V1_OPERATOR = BASE / "mobile-all30-eval-launch-v1"
+V1_OPS = BASE / "mobile-eps0316-evaluation-ops-v1"
+FAILED_INSPECTION = BASE / "mobile-all30-eval-inspection.ZUxVLZ"
 OLD_OPERATOR = BASE / "mobile-remaining27-launch-v1"
 OLD_PLAN = BASE / "mobile-eps0316-remaining27-ops-v1"
 EVIDENCE = BASE / "mobile-all30-eval-evidence-v1"
@@ -40,6 +45,29 @@ THREAD_ENV = ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS",
               "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS")
 BUNDLE_FILES = ("launcher.py", "report.py", "figures.py", "batch.sh", "HPC_HANDOFF.md", "REVIEW.md")
 HOME = Path(__file__).absolute().parent
+RESOURCE_KEYS = ("account", "qos", "partition", "node", "gres", "wall_time")
+
+
+def utc_now():
+    return datetime.now(timezone.utc)
+
+
+@contextmanager
+def phase(label):
+    started = time.monotonic()
+    print(f"[mobile-eval] {label}: start", file=sys.stderr, flush=True)
+    try:
+        yield
+    except BaseException:
+        print(f"[mobile-eval] {label}: failed after {time.monotonic() - started:.1f}s", file=sys.stderr, flush=True)
+        raise
+    else:
+        print(f"[mobile-eval] {label}: done in {time.monotonic() - started:.1f}s", file=sys.stderr, flush=True)
+
+
+def legacy_quiescence():
+    require(not plain(V1_OPS).exists(),
+            "Historical v1 operations evidence exists; preserve it and reconcile cross-version reservations before new work")
 
 
 def require(ok, message):
@@ -166,7 +194,8 @@ def pin():
 
 def own_bundle():
     same(sorted(p.name for p in plain(HOME).iterdir()), sorted(BUNDLE_FILES), "new unowned six-file bundle")
-    disjoint(HOME, [NATIVE, STUDY, BASE / "main-v1", OLD_OPERATOR, OLD_PLAN, OPS, EVALUATIONS, EVIDENCE])
+    disjoint(HOME, [NATIVE, STUDY, BASE / "main-v1", OLD_OPERATOR, OLD_PLAN, OPS, EVALUATIONS, EVIDENCE,
+                    V1_OPERATOR, V1_OPS, FAILED_INSPECTION])
     owner = seal({"version": VERSION, "kind": "external_evaluation_bundle", "root": str(plain(HOME)),
                   "token": uuid.uuid4().hex})
     publish(HOME / "BUNDLE_OWNER.json", owner)
@@ -215,8 +244,11 @@ def native_inputs():
     expected_slots = [(a, r) for a in ALPHAS for r in ((0,) if a == 0 else (1, 2, 3))]
     same([(s.evaluation_alpha, s.evaluation_replicate) for s in prescribed_slots()], expected_slots,
          "all 28 native slots")
-    protected = [NATIVE, STUDY, HOME, OLD_OPERATOR, OLD_PLAN, EVIDENCE, *pilot["protected_roots"]]
+    protected = [NATIVE, STUDY, HOME, OLD_OPERATOR, OLD_PLAN, EVIDENCE, V1_OPERATOR, V1_OPS,
+                 FAILED_INSPECTION, *pilot["protected_roots"]]
     for task in manifest.tasks:
+        checkpoint_started = time.monotonic()
+        print(f"[mobile-eval] checkpoint {task.global_index + 1}/30: verifying {task.run_id}", file=sys.stderr, flush=True)
         observation = inspect_task(task, base_dir=pilot["base_dir"])
         require(observation.condition == "ok" and observation.training_complete
                 and observation.completed_epochs == 200, f"Actual training incomplete/unstable: {task.run_id}")
@@ -232,6 +264,8 @@ def native_inputs():
         protected.extend(p for k, p in storage.items() if p and k != "split_file")
         if storage["split_file"]:
             protected.append(Path(storage["split_file"]).parent)
+        print(f"[mobile-eval] checkpoint {task.global_index + 1}/30: verified in "
+              f"{time.monotonic() - checkpoint_started:.1f}s", file=sys.stderr, flush=True)
     native = {"base_dir": str(plain(pilot["base_dir"])), "source_root": str(plain(NATIVE)),
               "source": actual["code"], "software": actual["software"], "launch_inputs": launch,
               "manifest_path": str(STUDY / "study.json"), "manifest_file_sha256": digest(STUDY / "study.json"),
@@ -340,7 +374,7 @@ def inspection(path, *, fresh):
     require(re.fullmatch(r"gpu(?::[A-Za-z0-9_.-]+)?:1", value["gres"]) is not None, "One GPU GRES required")
     timestamp = datetime.fromisoformat(value["inspected_at_utc"].replace("Z", "+00:00"))
     require(timestamp.utcoffset() is not None and timestamp.utcoffset().total_seconds() == 0, "UTC inspection required")
-    age = (datetime.now(timezone.utc) - timestamp).total_seconds()
+    age = (utc_now() - timestamp).total_seconds()
     require(age >= 0 and (not fresh or age <= 900), "Submission inspection must be within 15 minutes")
     c, other = value["concurrency"], value["other_project_reserved_tasks"]
     require(type(c) is int and 1 <= c <= 4 and type(other) is int and 0 <= other and c + other <= 4,
@@ -353,21 +387,181 @@ def inspection(path, *, fresh):
     evidence = value["evidence_files"]
     require(type(evidence) is dict and set(evidence) == {"accounts", "nodes", "active_work", "storage", "walltime"},
             "Attach current account/QOS, node, whole-project active work, storage and wall-time evidence")
-    return {"record": value, "path": str(plain(path)), "sha256": digest(path),
-            "evidence": {k: {"path": str(plain(p)), "sha256": digest(p)} for k, p in evidence.items()}}
+    result = {"record": value, "path": str(plain(path)), "sha256": digest(path),
+              "evidence": {k: {"path": str(plain(p)), "sha256": digest(p)} for k, p in evidence.items()}}
+    if fresh:
+        root = plain(path).parent
+        collection = check(read(root / "COLLECTION.json"))
+        same(collection["version"], VERSION, "resource collection version")
+        same(collection["started_at_utc"], value["inspected_at_utc"], "earliest resource collection time")
+        same(collection["inspection_sha256"], result["sha256"], "collected inspection bytes")
+        same(collection["evidence"], result["evidence"], "newly collected evidence bytes")
+        same(check(read(root / "OWNER.json")), collection["owner"], "resource snapshot owner")
+        same([collection["owner"]["version"], collection["owner"]["kind"], collection["owner"]["root"]],
+             [VERSION, "resource_evidence", str(root)], "resource snapshot ownership scope")
+        same({k: v["path"] for k, v in result["evidence"].items()},
+             {k: str(root / (k + ".json")) for k in evidence}, "resource evidence belongs to its new snapshot")
+        submitter_identity(collection["submitter"])
+        start = datetime.fromisoformat(collection["started_at_utc"])
+        end = datetime.fromisoformat(collection["finished_at_utc"])
+        require(start <= end <= utc_now() and (end - start).total_seconds() <= 900,
+                "Resource evidence collection itself exceeded freshness or has invalid timestamps")
+        require(type(collection["elapsed_seconds"]) in (int, float) and 0 <= collection["elapsed_seconds"] <= 900,
+                "Resource collection exceeded the 15-minute monotonic budget")
+        receipts = read(result["evidence"]["accounts"]["path"])
+        require(set(receipts) == {"associations", "qos", "partition", "node"}, "Incomplete collected resource receipts")
+        for receipt in receipts.values():
+            require(start <= datetime.fromisoformat(receipt["started_at_utc"])
+                    <= datetime.fromisoformat(receipt["finished_at_utc"]) <= end,
+                    "Resource receipt predates collection; never retimestamp old evidence")
+        require(start <= datetime.fromisoformat(read(result["evidence"]["active_work"]["path"])["observed_at_utc"]) <= end,
+                "Queue receipt predates collection")
+        resource_eligibility(value, *(receipts[key]["stdout"] for key in ("associations", "qos", "partition", "node")))
+        result["collection"] = {"path": str(root / "COLLECTION.json"), "sha256": digest(root / "COLLECTION.json")}
+        require(0 <= (utc_now() - timestamp).total_seconds() <= 900,
+                "Resource evidence expired while validating its bytes; collect again")
+    return result
+
+
+def seconds(value):
+    if value in ("UNLIMITED", "NONE", "N/A", ""):
+        return None
+    match = re.fullmatch(r"(?:(\d+)-)?(\d+):(\d+):(\d+)", value)
+    require(match is not None, "Unparseable resource time limit: " + value)
+    days, hours, minutes, secs = (int(v or 0) for v in match.groups())
+    require(minutes < 60 and secs < 60, "Invalid resource time limit")
+    return days * 86400 + hours * 3600 + minutes * 60 + secs
+
+
+def control_fields(output):
+    require(len(output.strip().splitlines()) == 1, "Expect exactly one scontrol resource record")
+    pairs = re.findall(r"(?:^|\s)([A-Za-z][A-Za-z0-9_]*)=([^\s]*)", output.strip())
+    require(len({key for key, _ in pairs}) == len(pairs), "Duplicate scontrol resource fields")
+    return dict(pairs)
+
+
+def resource_eligibility(request, accounts, qos, partition, node):
+    """Validate chosen eligibility; never select replacements or change requests."""
+    associations = [line.split("|") for line in accounts.splitlines()]
+    require(associations and all(len(row) == 5 for row in associations), "Unparseable association evidence")
+    require(any(row[0] == request["account"] and row[1] == os_identity()["username"]
+                and row[2] in ("", request["partition"]) and request["qos"] in row[3].split(",")
+                for row in associations), "Chosen account/QOS/partition is not currently eligible")
+    qos_rows = [line.split("|") for line in qos.splitlines()]
+    require(len(qos_rows) == 1 and len(qos_rows[0]) == 2 and qos_rows[0][0] == request["qos"],
+            "Chosen QOS is absent or ambiguous")
+    part, host = control_fields(partition), control_fields(node)
+    same([part.get("PartitionName"), part.get("State"), host.get("NodeName")],
+         [request["partition"], "UP", request["node"]], "current partition/node eligibility")
+    require(request["partition"] in host.get("Partitions", "").split(","), "Chosen node left the partition")
+    require(host.get("State", "").split("+")[0] in ("IDLE", "MIXED", "ALLOCATED")
+            and not any(flag in host["State"] for flag in ("DRAIN", "FAIL", "DOWN", "MAINT")),
+            "Chosen node is not currently eligible")
+    for key, denied, choice in (("AllowAccounts", "DenyAccounts", request["account"]),
+                                 ("AllowQos", "DenyQos", request["qos"])):
+        require(key in part and (part[key] == "ALL" or choice in part[key].split(","))
+                and choice not in part.get(denied, "").split(","), "Partition no longer permits chosen " + choice)
+    for limit in (qos_rows[0][1], part.get("MaxTime", "")):
+        maximum = seconds(limit)
+        require(maximum is None or seconds(request["wall_time"]) <= maximum, "Chosen wall time exceeds current limit")
+    require(int(host.get("CPUTot", "0")) >= 8 and int(host.get("RealMemory", "0")) >= 32768,
+            "Chosen node cannot satisfy the CPU/memory request")
+    selected_type = request["gres"].split(":")[1] if request["gres"].count(":") == 2 else None
+    gpu_counts = re.findall(r"(?:^|,)gpu(?::([A-Za-z0-9_.-]+))?:(\d+)(?:\([^)]*\))?", host.get("Gres", ""))
+    require(sum(int(count) for kind, count in gpu_counts if selected_type is None or kind == selected_type) >= 1,
+            "Chosen node cannot satisfy the declared GPU GRES")
+
+
+def collect_resources(requested, submitter, protected, *, expected=None):
+    """Collect new bytes after lengthy checks. Old timestamps are declarations only."""
+    r = requested["record"]
+    if expected is not None:
+        same({k: r[k] for k in RESOURCE_KEYS}, {k: expected[k] for k in RESOURCE_KEYS}, "explicit frozen resource choices")
+    submitter_identity(submitter)
+    root, owner = claim(BASE / ("mobile-all30-eval-resources-v2-" + uuid.uuid4().hex),
+                        [*protected, OPS, EVALUATIONS, V1_OPERATOR, V1_OPS, FAILED_INSPECTION], "resource_evidence")
+    started = utc_now()
+    started_monotonic = time.monotonic()
+    receipts = {}
+    def query(label, argv):
+        with phase("fresh resource " + label):
+            begin = utc_now()
+            output = command(argv, env=scheduler_environment("SACCT_"))
+            receipts[label] = {"argv": argv, "started_at_utc": begin.isoformat(),
+                               "finished_at_utc": utc_now().isoformat(), "stdout": output}
+            publish(root / (label + ".receipt.json"), receipts[label])
+            return output
+    with phase("collect current scheduler/resources"):
+        accounts = query("associations", ["sacctmgr", "-nP", "show", "assoc", "where",
+            "user=" + submitter["username"], "account=" + r["account"], "format=Account,User,Partition,QOS,DefaultQOS"])
+        qos = query("qos", ["sacctmgr", "-nP", "show", "qos", "where", "name=" + r["qos"], "format=Name,MaxWall"])
+        part = query("partition", ["scontrol", "--oneliner", "show", "partition", r["partition"]])
+        host = query("node", ["scontrol", "--oneliner", "show", "node", r["node"]])
+        resource_eligibility(r, accounts, qos, part, host)
+        usage = shutil.disk_usage(BASE)
+        require(usage.free > 0, "Shared storage has no available capacity; inspect quota/storage")
+        with phase("fresh user queue and reservations"):
+            current = queue(submitter)
+        require(len(current) <= r["other_project_reserved_tasks"],
+                "Submitting user's work exceeds reserved other-project tasks; refresh whole-project evidence")
+        submitter_identity(submitter)
+        data = {"accounts": receipts, "nodes": receipts["node"],
+                "active_work": {"submitter": submitter, "queue": current, "observed_at_utc": utc_now().isoformat()},
+                "storage": {"path": str(BASE), "total": usage.total, "used": usage.used, "free": usage.free},
+                "walltime": {"declared_wall_time": r["wall_time"], "operator_reason": r["reason"],
+                             "measurement_claim": False}}
+        for key, value in data.items():
+            publish(root / (key + ".json"), value)
+        record = {**r, "inspected_at_utc": started.isoformat(),
+                  "evidence_files": {key: str(root / (key + ".json")) for key in data}}
+        publish(root / "inspection.json", record)
+        observed = inspection(root / "inspection.json", fresh=False)
+        publish(root / "COLLECTION.json", seal({"version": VERSION, "owner": owner, "submitter": submitter,
+            "request": requested, "started_at_utc": started.isoformat(), "finished_at_utc": utc_now().isoformat(),
+            "elapsed_seconds": time.monotonic() - started_monotonic,
+            "inspection_sha256": observed["sha256"], "evidence": observed["evidence"]}))
+        return inspection(root / "inspection.json", fresh=True)
+
+
+def current_resources(observed):
+    same(inspection(observed["path"], fresh=True), observed, "fresh collected resource evidence")
+
+
+def static_native_inputs(native):
+    """Revalidate current source/software/launch/document bytes, without tensor reads."""
+    from alpha_sweep_training.manifests import load_manifest
+    from alpha_sweep_training.execution_provenance import collect_provenance
+    from alpha_sweep_training.mobile_candidate import _launch_inputs
+    actual = collect_provenance(NATIVE, attempt={"lifecycle": "external_static_preflight"})
+    same(actual["code"], native["source"], "pinned current reader source")
+    same(actual["software"], SOFTWARE, "current reader software")
+    same(_launch_inputs(native["launch_inputs"]["activation_script"]), native["launch_inputs"], "current launch inputs")
+    manifest = load_manifest(STUDY / "study.json")
+    same([manifest.grid_id, manifest.document_sha256, digest(STUDY / "study.json"), digest(STUDY / "pilot.json")],
+         [GRID, MANIFEST_SHA, native["manifest_file_sha256"], native["pilot_file_sha256"]], "current manifest/pilot bytes")
+    selection(manifest)
+    return manifest
 
 
 def prepare(args):
     submitter = os_identity()
-    native, _, protected = native_inputs()
-    mismatches = compare_export(native, args.export_bindings)
-    require(not mismatches, "Export/HPC mismatch; resolve before freezing: " + canonical(mismatches))
-    observed = inspection(args.inspection, fresh=True)
+    legacy_quiescence()
+    requested = inspection(args.inspection, fresh=False)
+    with phase("prepare full native/checkpoint verification"):
+        native, _, protected = native_inputs()
+        mismatches = compare_export(native, args.export_bindings)
+        require(not mismatches, "Export/HPC mismatch; resolve before freezing: " + canonical(mismatches))
     external_pin = pin()
-    protected.extend([args.export_bindings, args.inspection, *(x["path"] for x in observed["evidence"].values())])
+    protected.extend([args.export_bindings, args.inspection, *(x["path"] for x in requested["evidence"].values())])
     disjoint(HOME, [p for p in protected if plain(p) != plain(HOME)])
     disjoint(EVALUATIONS, protected)
+    same(inspection(args.inspection, fresh=False), requested, "unchanged approved request")
+    observed = collect_resources(requested, submitter, protected)
+    protected.append(plain(observed["path"]).parent)
+    static_native_inputs(native)
+    same(pin(), external_pin, "external bytes after resource collection")
     submitter_identity(submitter)
+    current_resources(observed)
     root, owner = claim(OPS, [*protected, EVALUATIONS], "all30_evaluation_plan")
     (root / "waves").mkdir()
     fsync(root)
@@ -379,6 +573,7 @@ def prepare(args):
                  "inspection": observed, "resources": {"gpus": 1, "cpus": 8, "memory_gb": 32},
                  "policy": {"max_project_concurrent": 4, "automatic_requeue": False,
                             "reuse_legacy_clean": False, "all_native_slots": True}})
+    current_resources(observed)
     publish(root / "plan.json", plan)
     return plan
 
@@ -401,19 +596,7 @@ def load_plan(path, *, bind=True):
     if not bind:
         # Reporting must retain unbound rows instead of stopping on one failed
         # checkpoint read. It still validates the native manifest and external pin.
-        from alpha_sweep_training.manifests import load_manifest
-        from alpha_sweep_training.execution_provenance import collect_provenance
-        from alpha_sweep_training.mobile_candidate import _launch_inputs
-        actual = collect_provenance(NATIVE, attempt={"lifecycle": "historical_evaluation_report"})
-        same(actual["code"], plan["native"]["source"], "pinned historical reader source")
-        same(actual["software"], SOFTWARE, "historical reader software")
-        same(_launch_inputs(plan["native"]["launch_inputs"]["activation_script"]),
-             plan["native"]["launch_inputs"], "historical reader launch inputs")
-        manifest = load_manifest(STUDY / "study.json")
-        same([manifest.grid_id, manifest.document_sha256, digest(STUDY / "study.json")],
-             [GRID, MANIFEST_SHA, plan["native"]["manifest_file_sha256"]], "report manifest")
-        selection(manifest)
-        return plan, manifest
+        return plan, static_native_inputs(plan["native"])
     native, manifest, protected = native_inputs()
     same(native, plan["native"], "actual full source/software/launch/manifest/checkpoint bindings")
     require(not compare_export(native, plan["export"]["path"]), "Export changed or actual bindings differ")
@@ -460,6 +643,8 @@ def continuation_gate(plan, manifest, selected, retry_failed, reason):
     from alpha_sweep_training.evaluation_inputs import bind_evaluation_checkpoint
     from alpha_sweep_training.evaluation_coverage import collect_evaluation_coverage
     for i in selected:
+        started = time.monotonic()
+        print(f"[mobile-eval] slot coverage checkpoint {i + 1}/30: start", file=sys.stderr, flush=True)
         inputs = bind_evaluation_checkpoint(manifest.tasks[i], base_dir=plan["native"]["base_dir"])
         same(inputs.binding, plan["native"]["bindings"][i], "pre-submission binding")
         coverage = collect_evaluation_coverage(inputs, evaluation_root=EVALUATIONS)
@@ -469,36 +654,44 @@ def continuation_gate(plan, manifest, selected, retry_failed, reason):
                 f"Unresolved sweep authority at index {i}")
         if coverage["counts"]["failed"] or coverage["counts"]["unacknowledged_failures"]:
             require(retry_failed and reason.strip(), f"Failed slots require explicit audited retry: {i}")
+        print(f"[mobile-eval] slot coverage checkpoint {i + 1}/30: done in {time.monotonic() - started:.1f}s",
+              file=sys.stderr, flush=True)
 
 
 def preview_or_submit(args):
-    plan, manifest = load_plan(args.plan)
-    submitter_identity(plan["submitter"])
+    # This first read validates documents/source only, never checkpoints. Full
+    # current binding verification occurs once, under the submission lock.
+    initial, _ = load_plan(args.plan, bind=False)
+    submitter_identity(initial["submitter"])
+    legacy_quiescence()
     selected = indices(args.indices)
-    observed = inspection(args.inspection, fresh=True)
+    requested = inspection(args.inspection, fresh=False)
     wave = wave_path(args.wave)
-    continuation_gate(plan, manifest, selected, args.retry_failed, args.reason)
-    argv = argv_for(plan, wave, observed, selected)
-    if not args.execute:
-        return {"submission_performed": False, "argv": argv, "shell_preview": shlex.join(argv),
-                "retry_failed": args.retry_failed, "reason": args.reason,
-                "note": "Submission repeats fresh pins, authority, queue and exclusive ownership checks"}
-    require(args.confirmed_project_window and args.reason.strip(), "Explicit project reservation confirmation and audit reason required")
-    with controller_lock(OPS):
+    if args.execute:
+        require(args.confirmed_project_window and args.reason.strip(), "Explicit project reservation confirmation and audit reason required")
+    with controller_lock(OPS) if args.execute else nullcontext():
         # At most one unresolved wave; even a lost sbatch acknowledgment reserves capacity.
         for previous in plain(OPS / "waves").iterdir():
             previous = plain(previous)
             require(previous.is_dir(), "Unknown wave evidence; inspect manually")
             require((previous / "settled.json").is_file(), "Previous wave unresolved: " + str(previous))
-            validate_settlement(previous, plan)
+            validate_settlement(previous, initial)
         require(not wave.exists(), "Never reuse a wave, including incomplete submissions")
-        # Revalidate after waiting for the controller lock, before any intent write.
-        load_plan(args.plan)
-        continuation_gate(plan, manifest, selected, args.retry_failed, args.reason)
-        same(inspection(args.inspection, fresh=True), observed, "unchanged fresh inspection/evidence")
-        current = queue(plan["submitter"])
-        require(len(current) <= observed["record"]["other_project_reserved_tasks"],
-                "Submitting user's work exceeds reserved other-project tasks; refresh whole-project evidence")
+        with phase("submit full current source/checkpoint verification"):
+            plan, manifest = load_plan(args.plan)
+            same(plan, initial, "unchanged plan across controller acquisition")
+            continuation_gate(plan, manifest, selected, args.retry_failed, args.reason)
+        same(inspection(args.inspection, fresh=False), requested, "unchanged approved resource request")
+        observed = collect_resources(requested, plan["submitter"], plan["protected_roots"],
+                                     expected=plan["inspection"]["record"])
+        same(load_plan(args.plan, bind=False)[0], plan, "current source/launch/plan bytes after resource collection")
+        current_resources(observed)
+        current = read(observed["evidence"]["active_work"]["path"])["queue"]
+        argv = argv_for(plan, wave, observed, selected)
+        if not args.execute:
+            return {"submission_performed": False, "argv": argv, "shell_preview": shlex.join(argv),
+                    "inspection": observed, "retry_failed": args.retry_failed, "reason": args.reason,
+                    "note": "Preview collected new resource evidence; explicit submission repeats full checks then recollects"}
         submitter_identity(plan["submitter"])
         wave.mkdir()
         fsync(wave.parent)
@@ -511,6 +704,11 @@ def preview_or_submit(args):
                        "retry_failed": args.retry_failed, "reason": args.reason,
                        "queue": current, "created_at_utc": datetime.now(timezone.utc).isoformat()})
         publish(wave / "intent.json", intent)
+        # No expensive checkpoint operation follows collection. Delay, identity
+        # or byte changes here leave the durable intent reserved, never submitted.
+        submitter_identity(plan["submitter"])
+        same(pin(), plan["operator_pin"], "external code immediately before sbatch")
+        current_resources(observed)
         try:
             response = subprocess.run(argv, capture_output=True, text=True, timeout=45, check=False)
         except (OSError, subprocess.SubprocessError) as exc:
@@ -726,14 +924,16 @@ def main(argv=None):
     p.add_argument("--export-bindings", required=True)
     p = commands.add_parser("prepare")
     p.add_argument("--export-bindings", required=True)
-    p.add_argument("--inspection", required=True)
+    p.add_argument("--resource-request", "--inspection", dest="inspection", required=True,
+                   help="Read-only reviewed choices/evidence; fresh resources are collected after full verification")
     for name in ("validate", "submit", "record-job", "settle", "run"):
         p = commands.add_parser(name)
         p.add_argument("--plan", required=True)
         if name != "validate":
             p.add_argument("--wave", required=True)
         if name == "submit":
-            p.add_argument("--inspection", required=True)
+            p.add_argument("--resource-request", "--inspection", dest="inspection", required=True,
+                           help="Explicit reviewed choices; this command collects fresh resources after binding checks")
             p.add_argument("--indices", default="0-29")
             p.add_argument("--retry-failed", action="store_true")
             p.add_argument("--reason", default="")

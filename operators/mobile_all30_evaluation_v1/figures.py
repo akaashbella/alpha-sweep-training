@@ -31,6 +31,7 @@ def main(argv=None):
     op.require(len(report["training"]) == 30 and len(report["evaluation"]) == 840, "Full observation grid required")
     summary = plot_inputs(report)
     protected = [op.NATIVE, op.STUDY, op.HOME, op.OPS, op.EVALUATIONS, op.OLD_OPERATOR, op.OLD_PLAN,
+                 op.V1_OPERATOR, op.V1_OPS, op.FAILED_INSPECTION,
                  report_path.parent, op.BASE / "main-v1"]
     root, _ = op.claim(args.output_dir, protected, "derived_evaluation_figures")
     import matplotlib
