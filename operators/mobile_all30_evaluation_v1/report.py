@@ -8,13 +8,92 @@ import statistics
 import launcher as op
 
 
+class UnstableInspection(RuntimeError):
+    """Observed authority/evidence changed while it was being read."""
+
+
+def inspection_error(exc, phase):
+    kind = ("unstable" if isinstance(exc, UnstableInspection) else
+            "missing" if isinstance(exc, FileNotFoundError) else
+            "unreadable" if isinstance(exc, OSError) else
+            "incompatible" if "binding" in phase else "unreadable")
+    return {"phase": phase, "kind": kind, "error": f"{type(exc).__name__}: {exc}"}
+
+
+def stable(ok, message):
+    if not ok:
+        raise UnstableInspection(message)
+
+
+def verified_measurement(row):
+    """Fail closed for old reports and retained, unverified raw measurements."""
+    return (row.get("binding_verified") is True and row.get("observation_verified") is True
+            and row.get("measurement_verified") is True and row.get("condition") == "ok"
+            and row.get("stored_status") == "evaluation_completed" and type(row.get("test_metrics")) is dict)
+
+
+def inspect_slot(item, inputs, slot, namespace):
+    """Append evidence in place. A failed section never discards earlier reads."""
+    from alpha_sweep_training.evaluation_persistence import _read_reference, validate_result, read_slot
+    if item["condition"] == "ok":
+        phase = "slot_head"
+        try:
+            current = read_slot(namespace, inputs, slot)
+            if current is None:
+                raise FileNotFoundError("Slot HEAD disappeared")
+            item.update(observed_head=current[0], observed_result=current[1],
+                        test_metrics=current[1].get("test_metrics"))
+            stable(op.canonical(current[0]["current"]) == op.canonical(item["reference"]), "Slot HEAD changed")
+            phase = "slot_history"
+            reference, seen = item["reference"], set()
+            while reference is not None:
+                op.require(reference["relative_path"] not in seen, "Result ancestry cycle")
+                seen.add(reference["relative_path"])
+                document = _read_reference(namespace, reference)
+                entry = {"reference": reference, "document": document, "validated": False}
+                item["raw_history"].append(entry)
+                validate_result(document, inputs, slot)
+                entry["validated"] = True
+                reference = document["previous_record"]
+        except Exception as exc:
+            item["inspection_errors"].append(inspection_error(exc, phase))
+    # Raw directories are independent of the HEAD/ancestry read. Preserve an
+    # available attempt or orphan record even if another section cannot be read.
+    for kind, target in (("records", item["raw_records"]), ("attempts", item["attempts"])):
+        try:
+            directory = op.plain(namespace / "slots" / slot.slot_id / kind)
+            paths = sorted(directory.iterdir()) if directory.is_dir() else []
+        except Exception as exc:
+            item["inspection_errors"].append(inspection_error(exc, kind))
+            continue
+        for path in paths:
+            relative = path.relative_to(namespace).as_posix()
+            try:
+                op.require(path.is_file(), "Non-file evidence")
+                document = op.read(path)
+                entry = {"relative_path": relative, "document": document, "sha256": None,
+                         "validated": False}
+                target.append(entry)
+                entry["sha256"] = op.digest(path)
+                if kind == "records":
+                    validate_result(document, inputs, slot)
+                    entry["validated"] = True
+            except Exception as exc:
+                try:
+                    sha = op.digest(path) if path.is_file() else None
+                except Exception:
+                    sha = None
+                error = {"relative_path": relative, "sha256": sha, **inspection_error(exc, kind)}
+                item["unparsed_evidence"].append(error)
+                item["inspection_errors"].append(error)
+
+
 def collect(plan, manifest):
     from alpha_sweep_training.coverage import inspect_task, _stamp, _lock_paths
     from alpha_sweep_training.artifacts import resolve_run_paths
     from alpha_sweep_training.evaluation_inputs import bind_evaluation_checkpoint
     from alpha_sweep_training.evaluation_coverage import collect_evaluation_coverage
     from alpha_sweep_training.evaluation_protocol import prescribed_slots, perturbation_seed
-    from alpha_sweep_training.evaluation_persistence import _read_reference, validate_result, read_slot
     from alpha_sweep_training.planning_inspection import evidence_stamp
     training, evaluations = [], []
     for task in manifest.tasks:
@@ -23,15 +102,20 @@ def collect(plan, manifest):
                "scientific_fingerprint": task.fingerprint, "training_alpha": science["alpha"],
                "training_seed": science["training_seed"], "training_completion_verified": False,
                "robustness_completion_verified": False, "best_validation": None,
-               "actual_binding": None, "error": None, "evaluation_coverage": None}
+               "actual_binding": None, "error": None, "evaluation_coverage": None, "final_evaluation_coverage": None,
+               "binding_verified": False, "training_snapshot_verified": False,
+               "evaluation_snapshot_verified": False, "inspection_errors": []}
         slots = [{"training_global_index": task.global_index, "training_run_id": task.run_id,
                   "training_alpha": science["alpha"], "training_seed": science["training_seed"],
                   **slot.to_dict(), "condition": "unbound", "stored_status": None,
                   "best_checkpoint_identity": None, "perturbation_seed": None, "reference": None,
                   "test_metrics": None, "raw_history": [], "orphan_failures": [], "raw_records": [],
-                  "attempts": [], "unparsed_evidence": [], "diagnostic": None}
+                  "attempts": [], "unparsed_evidence": [], "diagnostic": None,
+                  "binding_verified": False, "observation_verified": False,
+                  "measurement_verified": False, "inspection_state": "not_inspected",
+                  "inspection_errors": [], "checkpoint_errors": []}
                  for slot in prescribed_slots()]
-        paths, before = None, None
+        paths, before, phase = None, None, "training_observation"
         try:
             observation = inspect_task(task, base_dir=plan["native"]["base_dir"])
             row["training_observation"] = observation.to_dict()
@@ -39,78 +123,80 @@ def collect(plan, manifest):
                        "Training authority is incomplete or unstable")
             paths = resolve_run_paths(task.config, plan["native"]["base_dir"])
             before = _stamp(paths)
-            op.require(not any(p.exists() or p.is_symlink() for p in _lock_paths(paths)), "Training writer present")
+            stable(not any(p.exists() or p.is_symlink() for p in _lock_paths(paths)), "Training writer present")
+            phase = "checkpoint_binding"
             inputs = bind_evaluation_checkpoint(task, base_dir=plan["native"]["base_dir"], metadata_only=True)
+            # Retain the actual observation before comparing it with the plan.
+            row["actual_binding"] = inputs.binding
+            row["best_validation"] = inputs.binding["best_validation"]
+            for slot, item in zip(prescribed_slots(), slots):
+                item.update(best_checkpoint_identity=inputs.binding["best_checkpoint_identity"],
+                            perturbation_seed=perturbation_seed(inputs.binding["best_checkpoint_identity"], slot))
             op.same(inputs.training_transaction, observation.transaction, "report training boundary")
             op.same(inputs.binding, plan["native"]["bindings"][task.global_index], "actual/frozen report binding")
-            row.update(training_completion_verified=True, actual_binding=inputs.binding,
-                       best_validation=inputs.binding["best_validation"])
+            row.update(training_completion_verified=True, binding_verified=True)
+            for item in slots:
+                item["binding_verified"] = True
+            phase = "evaluation_coverage"
             coverage = collect_evaluation_coverage(inputs, evaluation_root=plan["evaluation_root"])
+            row["evaluation_coverage"] = coverage
             namespace = Path(coverage["namespace"])
-            # Include records/attempts beyond HEAD ancestry, without promoting
-            # uncommitted success, orphan failures or malformed staging evidence.
+            op.require(len(coverage["slots"]) == len(slots), "Require all 28 native coverage observations")
+            # Save every coverage observation before reading any individual slot.
+            for slot, observed, item in zip(prescribed_slots(), coverage["slots"], slots):
+                item["coverage_observation"] = observed
+                op.same({k: observed[k] for k in slot.to_dict()}, slot.to_dict(), "native coverage slot mapping")
+                item.update(observed)
+            phase = "evidence_snapshot"
             evidence_before = evidence_stamp((namespace,))
-            bound = []
-            for slot, observed, initial in zip(prescribed_slots(), coverage["slots"], slots):
-                item = {**initial, **observed, "best_checkpoint_identity": inputs.binding["best_checkpoint_identity"],
-                        "perturbation_seed": perturbation_seed(inputs.binding["best_checkpoint_identity"], slot)}
-                history, raw_records, attempts, unparsed = [], [], [], []
-                if observed["condition"] == "ok":
-                    current = read_slot(namespace, inputs, slot)
-                    op.require(current is not None, "Slot HEAD disappeared")
-                    op.same(current[0]["current"], observed["reference"], "slot HEAD snapshot")
-                    reference, seen = observed["reference"], set()
-                    while reference is not None:
-                        op.require(reference["relative_path"] not in seen, "Result ancestry cycle")
-                        seen.add(reference["relative_path"])
-                        document = validate_result(_read_reference(namespace, reference), inputs, slot)
-                        history.append({"reference": reference, "document": document})
-                        reference = document["previous_record"]
-                    if current[1]["status"] == "evaluation_completed":
-                        item["test_metrics"] = current[1]["test_metrics"]
-                for kind, target in (("records", raw_records), ("attempts", attempts)):
-                    directory = op.plain(namespace / "slots" / slot.slot_id / kind)
-                    if directory.is_dir():
-                        for path in sorted(directory.iterdir()):
-                            relative = path.relative_to(namespace).as_posix()
-                            try:
-                                op.require(path.is_file(), "Non-file evidence")
-                                document = op.read(path)
-                                if kind == "records":
-                                    validate_result(document, inputs, slot)
-                                target.append({"relative_path": relative, "sha256": op.digest(path), "document": document})
-                            except Exception as exc:
-                                try:
-                                    sha = op.digest(path) if path.is_file() else None
-                                except Exception:
-                                    sha = None
-                                unparsed.append({"relative_path": relative, "sha256": sha,
-                                                 "error": f"{type(exc).__name__}: {exc}"})
-                item.update(raw_history=history, raw_records=raw_records, attempts=attempts, unparsed_evidence=unparsed)
-                bound.append(item)
-            op.same(collect_evaluation_coverage(inputs, evaluation_root=plan["evaluation_root"]), coverage,
-                    "stable evaluation coverage")
-            op.require(evidence_before == evidence_stamp((namespace,)), "Raw evidence changed during read")
-            op.require(before == _stamp(paths) and not any(p.exists() or p.is_symlink() for p in _lock_paths(paths)),
-                       "Training changed during evaluation read")
-            row.update(evaluation_coverage=coverage, robustness_completion_verified=coverage["robustness_completed"])
-            slots = bound
+            phase = "slot_inspection"
+            for slot, item in zip(prescribed_slots(), slots):
+                inspect_slot(item, inputs, slot, namespace)
+            phase = "evaluation_stability"
+            final_coverage = collect_evaluation_coverage(inputs, evaluation_root=plan["evaluation_root"])
+            row["final_evaluation_coverage"] = final_coverage
+            stable(op.canonical(final_coverage) == op.canonical(coverage), "Native evaluation coverage changed")
+            stable(evidence_before == evidence_stamp((namespace,)), "Raw evidence changed during read")
+            phase = "training_stability"
+            stable(before == _stamp(paths) and not any(p.exists() or p.is_symlink() for p in _lock_paths(paths)),
+                   "Training changed during evaluation read")
+            row.update(training_snapshot_verified=True, evaluation_snapshot_verified=True)
+            for item in slots:
+                item["observation_verified"] = not item["inspection_errors"] and item["condition"] in ("ok", "pending")
+                item["measurement_verified"] = (item["observation_verified"] and item["condition"] == "ok"
+                    and item["stored_status"] == "evaluation_completed" and item["test_metrics"] is not None)
+                item["inspection_state"] = (item["inspection_errors"][0]["kind"] if item["inspection_errors"] else
+                    "missing" if item["condition"] == "pending" else
+                    "verified" if item["observation_verified"] else item["condition"])
+                if item["inspection_errors"]:
+                    item["diagnostic"] = "; ".join(e["error"] for e in item["inspection_errors"])
+            row["robustness_completion_verified"] = (coverage["robustness_completed"] is True
+                and all(verified_measurement(item) for item in slots))
         except Exception as exc:
-            row["error"] = f"{type(exc).__name__}: {exc}"
+            error = inspection_error(exc, phase)
+            row["error"] = error["error"]
+            row["inspection_errors"].append(error)
             if paths is not None and before is not None:
                 try:
-                    if before != _stamp(paths) or any(p.exists() or p.is_symlink() for p in _lock_paths(paths)):
-                        row["training_completion_verified"] = False
-                        row["best_validation"] = None
-                except Exception:
-                    row["training_completion_verified"] = False
-                    row["best_validation"] = None
+                    row["training_snapshot_verified"] = (before == _stamp(paths)
+                        and not any(p.exists() or p.is_symlink() for p in _lock_paths(paths)))
+                except Exception as training_exc:
+                    row["inspection_errors"].append(inspection_error(training_exc, "training_stability"))
+            row["training_completion_verified"] = (row["training_completion_verified"]
+                and row["training_snapshot_verified"] and phase != "training_stability")
+            if not row["training_completion_verified"]:
+                row["binding_verified"] = False
             for item in slots:
+                item["binding_verified"] = row["binding_verified"]
+                item["observation_verified"] = item["measurement_verified"] = False
+                item["inspection_state"] = error["kind"]
+                item["checkpoint_errors"].append(error)
                 item["diagnostic"] = row["error"]
         training.append(row)
         evaluations.extend(slots)
     op.require(len(training) == 30 and len(evaluations) == 840, "Preserve all expected observations")
-    return op.seal({"version": "mobile-all30-evaluation-report-v1", "scientific_completion_authority": False,
+    return op.seal({"version": "mobile-all30-evaluation-report-v1", "verification_version": 1,
+                    "scientific_completion_authority": False,
                     "plan_sha256": plan["document_sha256"], "operator_pin": plan["operator_pin"],
                     "grid_id": manifest.grid_id, "evaluation_root": plan["evaluation_root"],
                     "training": training, "evaluation": evaluations,
@@ -124,7 +210,8 @@ def summaries(training, evaluations):
     for alpha in op.ALPHAS:
         selected = [r for r in training if r["training_alpha"] == alpha]
         complete = len(selected) == 3 and {r["training_seed"] for r in selected} == {0, 1, 2} and all(
-            r["training_completion_verified"] and r["best_validation"] is not None for r in selected)
+            r.get("training_completion_verified") is True and r.get("training_snapshot_verified") is True
+            and r.get("binding_verified") is True and r["best_validation"] is not None for r in selected)
         values = [r["best_validation"]["correct"] / r["best_validation"]["examples"] for r in selected] if complete else []
         candidates.append({"training_alpha": alpha, "complete": complete,
                            "mean_validation_accuracy": statistics.mean(values) if complete else None,
@@ -135,11 +222,12 @@ def summaries(training, evaluations):
                         and r["evaluation_alpha"] == evaluation_alpha and r["training_seed"] == seed]
                 expected = [0] if evaluation_alpha == 0 else [1, 2, 3]
                 complete = sorted(r["evaluation_replicate"] for r in rows) == expected and all(
-                    r["condition"] == "ok" and r["stored_status"] == "evaluation_completed"
-                    and r["test_metrics"] is not None for r in rows)
+                    verified_measurement(r) for r in rows)
                 group = {"training_alpha": alpha, "evaluation_alpha": evaluation_alpha,
                          "training_seed": seed, "complete": complete, "expected_realizations": len(expected),
-                         "individual": [{"replicate": r["evaluation_replicate"], "metrics": r["test_metrics"]} for r in rows]}
+                         "individual": [{"replicate": r["evaluation_replicate"],
+                             "measurement_verified": verified_measurement(r),
+                             "metrics": r["test_metrics"] if verified_measurement(r) else None} for r in rows]}
                 for metric in ("accuracy", "loss"):
                     values = [r["test_metrics"][metric] for r in rows] if complete else []
                     group["mean_" + metric] = statistics.mean(values) if complete else None
@@ -188,6 +276,7 @@ def main(argv=None):
     op.publish(root / "report.json", result)
     fields = ["training_global_index", "training_run_id", "training_alpha", "training_seed", "evaluation_alpha",
               "evaluation_replicate", "perturbation_seed", "condition", "stored_status", "checkpoint_sha256",
+              "binding_verified", "observation_verified", "measurement_verified", "inspection_state",
               "examples", "correct", "accuracy", "loss", "diagnostic"]
     with (root / "slots.csv").open("x", encoding="utf-8", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=fields)

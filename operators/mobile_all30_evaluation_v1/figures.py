@@ -6,6 +6,18 @@ from pathlib import Path
 import statistics
 
 import launcher as op
+import report as reporting
+
+
+def plot_inputs(document):
+    """Recompute from explicit verification flags, never trust cached summaries."""
+    op.same(document.get("verification_version"), 1, "explicit report verification schema; regenerate older reports")
+    return reporting.summaries(document["training"], document["evaluation"])
+
+
+def individual_points(group, metric):
+    return [item["metrics"][metric] for item in group["individual"]
+            if item.get("measurement_verified") is True and item["metrics"] is not None]
 
 
 def main(argv=None):
@@ -17,6 +29,7 @@ def main(argv=None):
     report = op.check(op.read(report_path))
     op.same(report["version"], "mobile-all30-evaluation-report-v1", "report version")
     op.require(len(report["training"]) == 30 and len(report["evaluation"]) == 840, "Full observation grid required")
+    summary = plot_inputs(report)
     protected = [op.NATIVE, op.STUDY, op.HOME, op.OPS, op.EVALUATIONS, op.OLD_OPERATOR, op.OLD_PLAN,
                  report_path.parent, op.BASE / "main-v1"]
     root, _ = op.claim(args.output_dir, protected, "derived_evaluation_figures")
@@ -24,9 +37,9 @@ def main(argv=None):
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     colors = plt.get_cmap("tab10")
-    groups = report["summaries"]["across_training_seeds"]
-    seeds = report["summaries"]["per_training_seed"]
-    relative = report["summaries"]["paired_clean_relative"]
+    groups = summary["across_training_seeds"]
+    seeds = summary["per_training_seed"]
+    relative = summary["paired_clean_relative"]
     files = []
 
     def save(fig, name):
@@ -60,9 +73,8 @@ def main(argv=None):
                 ax.plot(op.ALPHAS, [scale * g["mean_" + metric] if g["complete"] else math.nan for g in selected],
                         color=colors(seed), label=f"seed {seed}")
                 for group in selected:
-                    for item in group["individual"]:
-                        if item["metrics"] is not None:
-                            ax.scatter(group["evaluation_alpha"], scale * item["metrics"][metric], color=colors(seed), s=10, alpha=.6)
+                    for value in individual_points(group, metric):
+                        ax.scatter(group["evaluation_alpha"], scale * value, color=colors(seed), s=10, alpha=.6)
             ax.set(title=f"Training alpha {alpha:g}", xlabel="Evaluation alpha",
                    ylabel="Accuracy (%)" if metric == "accuracy" else "Cross-entropy")
             ax.grid(alpha=.25)
@@ -89,8 +101,8 @@ def main(argv=None):
         save(fig, key)
     op.publish(root / "FIGURES.json", op.seal({"report_sha256": op.digest(report_path),
                "scientific_completion_authority": False, "files": {name: op.digest(root / name) for name in files},
-               "formulas": report["summaries"]["relative_formulas"],
-               "missing_observations": sum(r["test_metrics"] is None for r in report["evaluation"]),
+               "formulas": summary["relative_formulas"],
+               "unverified_measurements": sum(not reporting.verified_measurement(r) for r in report["evaluation"]),
                "scope": "Revised MobileNet only; final presentation must supply each graph type for every model"}))
     print(op.canonical({"figures": str(root), "files": files}))
     return 0

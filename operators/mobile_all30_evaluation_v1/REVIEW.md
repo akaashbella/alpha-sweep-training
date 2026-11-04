@@ -1,11 +1,19 @@
 # Source review and evidence boundary
 
-Prepared November 4, 2026 on Windows. Worktree:
+Revised November 4, 2026 on Windows. Worktree:
 `C:\Users\akaas\RESEARCH\alpha-sweep-training\.handoff-worktrees\mobile-all30-evaluation`;
-branch `ops/mobile-all30-evaluation-v1`, based on local `71922f3`. The frozen
-native commit named by the ZIP was absent from local Git. Relevant source was
-read through the GitHub connector at the exact pinned commit, without fetching,
-editing or executing the native checkout. Nothing was committed or pushed.
+branch `ops/mobile-all30-evaluation-v1`, HEAD
+`c910d0c626593594537b8e14f971c063acf56311`. The original six-file handoff was
+committed/pushed in the previous authorized task. This scoped revision authorizes
+CPU tests, test-related imports and syntax checks, and remains uncommitted and
+unpushed. It authorizes no HPC operations, installs or research execution.
+
+The native commit named by the ZIP was absent from local Git during initial
+preparation; relevant APIs were read through GitHub at that exact pinned commit.
+Frozen native commit `8010d07d9d1f0886ab1e180523f316623ef622a4`, scientific
+settings, manifests, checkpoints, results, historical operators and HPC plans
+remain untouched. Tests read existing local StopRequest/signal helper source
+under mocked native imports and mocked signal registration, never native compute.
 
 ## Evidence read
 
@@ -47,8 +55,21 @@ evaluation contracts were also read. No scientific constants were changed.
 
 ## Implementation review
 
-The six new files are listed in `HPC_HANDOFF.md`; no existing tracked file was
-edited. New evidence copies are source inputs, not new scientific results.
+The runtime inventory remains exactly the original six files, listed in
+`HPC_HANDOFF.md`. This revision changes only:
+
+- `operators/mobile_all30_evaluation_v1/report.py`
+- `operators/mobile_all30_evaluation_v1/figures.py`
+- `operators/mobile_all30_evaluation_v1/HPC_HANDOFF.md`
+- `operators/mobile_all30_evaluation_v1/REVIEW.md`
+
+New support, outside the strict runtime inventory:
+
+- `operators/mobile_all30_evaluation_checks/run_cpu_checks.py`
+- `operators/mobile_all30_evaluation_checks/test_operator.py`
+
+`launcher.py`, `batch.sh`, and all native source retain their bytes. Existing
+untracked `handoff-evidence/` remains untouched; no new scientific artifacts exist.
 New operational output namespaces have exclusive ownership, per-file/path pins,
 full best bindings, finite sealed JSON and POSIX durable exclusive publication.
 Missing summary/status aliases do not authorize replacement. Staging and
@@ -76,51 +97,93 @@ complete prescribed realization/seed sets. Individual passes remain prominent;
 within-checkpoint realization SD and between-training-seed SD are separate.
 Plot generators are source only; no research report/figure was generated.
 
-## Checks actually performed
+## Reporting correction
 
-- Git status/branch/worktree inspection and preservation of the existing untracked `AGENTS.md`.
-- Read-only ZIP entry enumeration, safe-path extraction and 27 manifest hash comparisons.
-- Source/API/parser inspection against pinned GitHub files and local contracts.
-- Manual source review of mapping, native dispatch arguments, signals, ownership,
-  intent-before-submit, no blind retry, slot/history enumeration and aggregation.
-- Final Git status/diff and source searches only. No test, compile, lint, import,
-  executable verification, environment installation, model, experiment or HPC command.
+The old collector held slot evidence in a temporary list until all 28 reads and
+final stability checks succeeded. Any later error replaced those observations
+with empty unbound rows. The revised collector appends evidence in place and
+records slot-section errors while continuing independent inspections. Both
+initial and returned final native coverage snapshots remain visible, even when
+they disagree. Actual bindings are retained before plan comparison.
 
-The new source is **unverified at runtime**. The ZIP's historical checks do not
-validate this implementation. Test creation and execution were left out because
-the user's repository instructions prohibit them; document requests were not
-treated as blanket authorization to override that direct restriction.
+The report keeps all 30 training/840 evaluation rows, full raw metrics and
+references, ancestry, records, attempts, orphan failures and unparsed evidence.
+Separate flags gate authority: `binding_verified`, `observation_verified`, and
+`measurement_verified`, plus checkpoint training/evaluation snapshot flags.
+Missing, unreadable, incompatible and unstable inspections are explicit states;
+structured errors retain their phase and diagnostics.
 
-## Required separately authorized CPU check matrix
+A local read/validation error invalidates that slot only when checkpoint-level
+stability is otherwise verified. A checkpoint-wide failure invalidates all 28
+measurement/observation flags without removing evidence. Training instability
+also invalidates validation selection. Native sweep publication alone cannot
+produce a report completion claim after an inspection failure; all 28 verified
+measurements must also be present. A parsed record's `validated` flag is not a
+replacement for those broader checks.
 
-| Area | Required evidence before execution |
+Aggregation excludes unverified rows from means, SDs, paired baselines and
+validation selection. Individual-point summary entries mask invalid metrics,
+while full raw values stay in evaluation rows and the flagged raw CSV. Plotting
+recomputes summaries from explicit raw verification flags, ignores cached
+measurements, and checks individual-point flags. Old reports without the new
+`verification_version: 1` marker fail closed before plot output creation.
+
+## Local verification
+
+The executable command, from the review worktree, is:
+
+```powershell
+python -B operators/mobile_all30_evaluation_checks/run_cpu_checks.py
+```
+
+Environment: Windows, `C:\Python313\python.exe`, Python **3.13.12**. The runner
+uses only stdlib and local readable source. It performs in-memory syntax checks
+and Python 3.11 grammar parsing for all five Python runtime/support files, then
+runs the mocked unittest suite. It writes no bytecode. The final run passed
+**28 tests in 40.272 seconds**, plus syntax and Python 3.11 grammar checks for
+**five Python files**. `git diff --check` also passed. No pinned Torch/TorchVision
+installation was required. This is a local Windows result, not an HPC result.
+
+The first run had 20 passes and one failure: permission-denied binding reads were
+mislabelled `incompatible`. The fix gives I/O exception types precedence, so
+permission errors are `unreadable` and binding mismatches remain `incompatible`.
+The suite was then expanded for plotting calls, read-only evidence, post-preflight
+binding/runtime changes and final-read errors. No unrun check is counted as passed.
+
+| Area | Exercised behavior |
 |---|---|
-| Mapping | All indices 0–29 including pilots, exact alpha/seed order, 28 native slots; booleans/out-of-range/duplicate selectors reject |
-| Dispatch | Mock native evaluator captures full lossless binding, actual pilot-derived base, native source and explicit evaluation root; `None` all-slot selectors; retry/legacy defaults false |
-| Scope | Forbidden training/optimizer/scheduler/scaler/train-loader/checkpoint-writer entry points fail if invoked; no alternate best selection |
-| Pins | Changed native commit/inventory, any external file/path, manifest, interpreter target/activation/module declarations, software, actual best generation/digest/selection or runtime all reject |
-| RNG | JSON seeds above 2**53 survive losslessly and native checkpoint-derived realization keys remain unchanged |
-| Signals/outcomes | Native StopRequest receives signal policy; interrupted/numerical/execution/rejected exits propagate; cleanup errors never fabricate native success |
-| Continuation | Mock successful-slot skipping and same-realization partial restart remain delegated to native API; failed retries require a distinct audited intent |
-| Operational publication | Existing/partial namespace rejection, racing claims, fsync/rename/link failures, controller contention and loss of sbatch acknowledgment preserve evidence and reservation |
-| Concurrency | Combined other-stage reservation plus new limit <=4; stale inspection or excess account queue rejects; unresolved waves and incomplete accounting block next submission |
-| Reconciliation | Independent exact comment/name/account/partition/index mapping, observed-array and acknowledgment consistency, accounting delays/unknown IDs reject |
-| Reporting | Exactly 30/840 rows with pending/failed/unbound/checkpoint-null conditions and orphan/raw histories; no success from Slurm; stable-read changes reject per-checkpoint authority |
-| Aggregation/figures | Average positive realizations within checkpoint first, three complete training seeds, sample SDs, all-ten validation selection/ties, paired own-clean formulas and missing-data gaps |
+| Reporting regression | Late HEAD/ancestry/validation/final-read errors retain prior evidence, attempts, orphans and unparsed files; independent slots continue; all 30/840 rows persist |
+| Snapshot authority | Evidence/training/coverage stability failures invalidate affected flags and completion; actual mismatched bindings remain visible |
+| Consumers | Missing explicit flags fail closed; unverified rows disappear from official summaries and actual mocked scatter calls; cached summaries cannot bypass gating |
+| Statistics | Within-checkpoint realization means, three-seed means/sample SD, complete validation candidates and grid-ordered exact ties |
+| Mapping/dispatch | All 30 actual wrapper workers, pilots included; independent prescribed 28-slot fixture; invalid selectors reject; full lossless `expected_binding`, roots, all-slot selectors, retry/legacy defaults |
+| Scope | Native training/optimizer/scheduler/scaler/model/checkpoint-loader/training-loader boundaries are forbidden guards; no research data is loaded |
+| Pins | Native commit/digest/dirty-source rejection; modified external source rejection; changed checkpoint binding during plan validation and again after preflight; effective runtime mismatch rejection |
+| Integer JSON | `2**64 - 59` survives real exclusive publication/read/seal and is forwarded unchanged |
+| Signals/outcomes | Real source StopRequest/signal context with mocked registration forwards the same stop request and preserves native exit codes 10/20/21/22 |
+| Submission | Mock sbatch observes an already durable exact intent; acknowledgment persisted; timeout leaves unresolved capacity and blocks repeated/new waves without another sbatch |
+| Ownership/concurrency | Real temporary exclusive owner/publication, controller contention, no-write preview, excess account work rejection and explicit-only failed retry |
+| Read-only reporting | Raw temporary scientific-evidence bytes unchanged; collector cannot call publication/ownership functions |
 
-No executable runner exists for these new wiring checks under the current
-source-only authorization. Exact future real-input CPU commands and the separate
-GPU/submission/reporting phases are in `HPC_HANDOFF.md`. A compatible environment
-and separate authorization are still needed before creating/running tests or
-operating the handoff. Do not infer launch readiness from source inspection.
+These are external wiring/regression tests, not tests of native GPU numerics,
+native checkpoint parsing, scheduler behavior or model evaluation. Fake native
+dependencies intentionally prevent real research computation. Matplotlib is
+mocked; only its call inputs are checked, not actual renderer output. Windows
+mocks directory-fsync because the production primitive is POSIX-only; actual
+temporary file writes, hard-link exclusion and ownership remain exercised.
+
+The exact future HPC CPU repeat is documented in `HPC_HANDOFF.md` using
+`run_cpu_checks.py --native-source-root <existing-frozen-checkout>`, with the
+same suite and real POSIX directory-fsync on that host. No HPC command was run
+here. No dependency blocker remains for these pure mocked local checks.
 
 ## Material limitations and blocked operations
 
 Actual HPC connectivity/state, current account/QOS limits, prepared data, all 30
 checkpoint files, interpreter/activation bytes and allocation runtime have not
 been inspected here. No operational plan has been frozen. No timing measurement
-supports a wall-time default. Matplotlib is only required for later plots; it was
-not probed or installed. Fresh resource evidence is reviewed by the operator;
+supports a wall-time default. Actual Matplotlib rendering was not exercised or
+installed. Fresh resource evidence is reviewed by the operator;
 free-text administrator output is not automatically interpreted as entitlement.
 
 This deliberately conservative first version does not clear an intent with no
@@ -134,3 +197,8 @@ this favors conservative equality checks but may be expensive on shared storage.
 No performance claim was measured. The final all-model thesis presentation is
 outside this MobileNet-only implementation; matching graph types and explicit
 recipe labels remain required when that presentation is later requested.
+
+The older full repository snapshot on this branch must not replace the pinned
+HPC checkout. Only six external runtime files and two separate CPU support files
+are transferred to a new review/deployment directory. Changed runtime hashes
+must not be retrofitted into existing pinned plans or unresolved submissions.

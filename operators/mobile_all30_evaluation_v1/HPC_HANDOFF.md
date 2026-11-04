@@ -1,11 +1,12 @@
 # Revised MobileNet: separate all-30 evaluation operator
 
-This is a **source review handoff**, prepared November 4, 2026. No Python,
-tests, imports, Slurm commands, HPC inspection, checkpoint loads, research passes,
-reports or plots were executed during preparation. None of the commands below
-has been run. The ZIP's request for tests conflicts with the direct repository
-instructions prohibiting test creation/execution; those checks need separate
-authorization. Source review does not establish runtime correctness.
+This is an external operator handoff, revised November 4, 2026 from branch
+`ops/mobile-all30-evaluation-v1`, commit
+`c910d0c626593594537b8e14f971c063acf56311`. The user separately authorized local
+CPU tests, test imports and syntax checks for this revision. Mocked checks ran;
+no real checkpoint loads, evaluation, HPC operations, Slurm contact, dependency
+installation or research reporting/plotting ran. No operational command below
+has been run in this revision. Current changes are uncommitted and unpushed.
 
 The bundle uses the frozen native evaluator at commit
 `8010d07d9d1f0886ab1e180523f316623ef622a4`, source inventory
@@ -25,11 +26,28 @@ selection from test scores, commit or push is part of this handoff.
 | `HPC_HANDOFF.md` | Future commands and operating restrictions |
 | `REVIEW.md` | Source review, evidence, checks still required and limitations |
 
+Two new check-support files live **outside** this six-file runtime inventory:
+
+| Sibling directory `../mobile_all30_evaluation_checks/` | Responsibility |
+|---|---|
+| `run_cpu_checks.py` | Standard-library runner; syntax and Python 3.11 grammar checks |
+| `test_operator.py` | Reporting regressions, native API wiring, mocked plotting and temporary operational publication |
+
+This revision modifies `report.py`, `figures.py`, `HPC_HANDOFF.md`, and
+`REVIEW.md`; `launcher.py` and `batch.sh` retain their bytes. Tests do not enter
+`BUNDLE_FILES` or the deployed runtime directory. Copying test files into that
+directory correctly fails its strict inventory check. The branch contains an
+older full repository snapshot: transfer only the external files and separate
+check support, **never replace the frozen HPC native checkout**.
+
 `BUNDLE_OWNER.json` is created exclusively **on HPC** by `own-bundle`, then pinned
 along with all six source files and their absolute paths. Every actual import
 from the external bundle is covered; no historical external helper is imported.
 Changing any file after plan freezing rejects new execution. Revisions require a
 separately reviewed new bundle/plan version; preserve unresolved intents first.
+Do not copy this revision over an existing pinned runtime bundle or rewrite an
+existing HPC plan. Transfer commands stop at existing destinations; adoption of
+changed hashes into actual operational work remains separately authorized.
 
 ## Fixed paths and scope
 
@@ -319,12 +337,41 @@ FIGURES="$BASE/mobile-all30-eval-figures-$(date -u +%Y%m%dT%H%M%SZ)"
 "$PY" -B "$OP/figures.py" --report "$REPORT/report.json" --output-dir "$FIGURES"
 ```
 
-`report.json` retains all 840 rows, null checkpoint/seeds on unbound reads,
-explicit conditions/failures, full checkpoint/protocol provenance, native sweep
-completion, committed ancestry, orphan records, attempts and unparsed evidence.
+`report.json` retains all 30 training rows and 840 evaluation rows. Evidence is
+appended as read: actual bindings, native coverage, references, metrics, ancestry,
+parsed raw records, attempts, orphan failures and unparsed evidence. A slot-local
+failure is recorded on that slot and independent slots/sections continue.
+`inspection_state` distinguishes `missing`, `unreadable`, `incompatible` binding
+mismatches and `unstable` snapshots, with structured `inspection_errors` and
+`checkpoint_errors`. Never-read rows retain null identities/seeds/metrics; earlier
+observations survive later errors.
+
+Reports add `verification_version: 1` and explicit verification booleans:
+
+- `binding_verified`: the actual binding matches the plan and training authority
+  remains verified.
+- `observation_verified`: the slot was inspected without error within a verified
+  binding and stable evaluation snapshot. Pending observations can be verified
+  observations without a measurement.
+- `measurement_verified`: the slot is a verified successful full-pass measurement.
+- Training rows record `training_snapshot_verified` and
+  `evaluation_snapshot_verified`. Robustness completion requires native published
+  sweep authority **and all 28 verified measurements**.
+
+A checkpoint-wide binding/stability/read failure invalidates observation and
+measurement authority across all 28 slots without erasing raw evidence. Training
+snapshot failure also invalidates validation-selection authority; evaluation-only
+failure does not discard independently verified training evidence. A raw record's
+`validated` field covers only its local parsing, not checkpoint/slot authority.
+Status inside retained native coverage/results is an observation, not the report's
+verified completion claim.
+
 `slots.csv` is a convenience view; uint64 noise seeds must be read as integers,
 never via spreadsheet/JavaScript floating-point conversion. Native HEADs remain
 the authority. An allocation ending or diagnostic outcome never creates a success.
+CSV numeric columns remain **raw**, accompanied by verification/state fields.
+Raw numbers can be present with `measurement_verified: false`; analysis must
+filter with all verification fields. JSON retains the full underlying evidence.
 
 Positive realizations are averaged **within each training seed first**. Official
 cross-seed summaries require all three seeds and use sample SD (`ddof=1`),
@@ -342,14 +389,72 @@ label revised MobileNet epsilon 0.0316 and original other-model recipes, and avo
 calling population weight SD a flatness measurement. This stage does not evaluate
 other architectures or produce a final all-model presentation.
 
-## CPU wiring verification still required
+Both aggregation and individual-point plotting require explicit verification.
+Plots recompute summaries from verified raw rows rather than trusting cached
+summaries. Older reports without `verification_version: 1` are rejected before
+output creation; regenerate them with the revised read-only collector after
+reporting is separately authorized. Unverified metrics enter no curve, error
+bar, individual point or completion count.
 
-No new tests were created or run: the repository instruction explicitly forbids
-both. The exact future **real-input CPU inspection/validation commands** are
-`inspect-inputs`, `prepare`, and `validate` above; they are not substitutes for
-mocked wiring tests. Before authorizing execution, separately authorize and add
-the check matrix in `REVIEW.md` in a compatible environment. There is currently
-no new test runner to claim passed or supply as an executable check command.
-Do not run a historical training-operator test command and call it validation of
-this new wrapper. Existing native CUDA/CPU results reported in the ZIP are
-historical evidence only.
+## Executable CPU wiring checks
+
+From this review worktree, use standard Python 3.11+:
+
+```powershell
+python -B operators/mobile_all30_evaluation_checks/run_cpu_checks.py
+```
+
+Actual local result on Windows / Python 3.13.12: **28 tests passed in 40.272
+seconds**; syntax and Python 3.11 grammar checks passed for all five Python files.
+`git diff --check` passed. No dependency installation, real checkpoint load,
+Slurm contact, HPC operation or research computation occurred. POSIX behavior and
+the real pinned GPU environment remain unverified here.
+
+The runner requires only stdlib, the external bundle, and readable
+`interruption.py` / `allocation_signals.py` helper source from this checkout.
+It closes the native package namespace to actual research imports and mocks
+Torch/CUDA/runtime/checkpoint/evaluator/Slurm boundaries. The real external
+functions run, as do the stop/signal helpers with mocked signal registration;
+no OS signal is sent. All records and mocked rendering outputs are temporary
+fixtures. Windows mocks POSIX directory-fsync; file writes, exclusive hard-link
+publication and ownership checks remain real. Linux uses real directory-fsync.
+
+For a future approved HPC CPU repeat, stage a new review directory with only:
+
+```text
+<new-review-directory>/
+  mobile_all30_evaluation_v1/       # exactly the six runtime files
+  mobile_all30_evaluation_checks/   # exactly the two check-support files
+```
+
+PowerShell transfer pattern, after separate transfer authorization, using the
+established `$HpcHost` and `$TaskRoot` from the earlier example:
+
+```powershell
+$CpuReview = '/nfs/hpc/share/bellaak/research/alpha-sweep/mobile-all30-eval-cpu-review-20261104'
+ssh $HpcHost "test ! -e $CpuReview"
+if ($LASTEXITCODE -ne 0) { throw 'Review destination exists or SSH check failed' }
+ssh $HpcHost "mkdir $CpuReview"
+if ($LASTEXITCODE -ne 0) { throw 'Review directory creation failed' }
+scp -r "$TaskRoot\operators\mobile_all30_evaluation_v1" "${HpcHost}:$CpuReview/"
+if ($LASTEXITCODE -ne 0) { throw 'Partial external source transfer; preserve it' }
+scp -r "$TaskRoot\operators\mobile_all30_evaluation_checks" "${HpcHost}:$CpuReview/"
+if ($LASTEXITCODE -ne 0) { throw 'Partial CPU support transfer; preserve it' }
+```
+
+Exact future CPU command; no `own-bundle`, plan creation or installed research
+package is required for the tests:
+
+```bash
+CPU_REVIEW=/nfs/hpc/share/bellaak/research/alpha-sweep/mobile-all30-eval-cpu-review-20261104
+NATIVE=/nfs/hpc/share/bellaak/research/alpha-sweep/alpha-sweep-mobile-eps0316
+PY=/nfs/hpc/share/bellaak/research/alpha-sweep/alpha-sweep-training/.venv/bin/python
+"$PY" -B "$CPU_REVIEW/mobile_all30_evaluation_checks/run_cpu_checks.py" \
+  --native-source-root "$NATIVE"
+```
+
+This reads only existing stop/signal helper source at the frozen checkout; it
+does not install, check out, replace or alter that checkout. The review source
+is never adopted as an existing operational plan. See `REVIEW.md` for actual
+local results and remaining limitations. Historical native CUDA/CPU results in
+the ZIP remain separate evidence.
