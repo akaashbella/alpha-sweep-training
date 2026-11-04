@@ -1,0 +1,355 @@
+# Revised MobileNet: separate all-30 evaluation operator
+
+This is a **source review handoff**, prepared November 4, 2026. No Python,
+tests, imports, Slurm commands, HPC inspection, checkpoint loads, research passes,
+reports or plots were executed during preparation. None of the commands below
+has been run. The ZIP's request for tests conflicts with the direct repository
+instructions prohibiting test creation/execution; those checks need separate
+authorization. Source review does not establish runtime correctness.
+
+The bundle uses the frozen native evaluator at commit
+`8010d07d9d1f0886ab1e180523f316623ef622a4`, source inventory
+`a5726bac3f449455d36e2f53840f3e0fd77768a7ab2b989d2884da20f920005c`.
+Native source, training artifacts, original epsilon-0.001 study, and historical
+remaining-27 operator/plans remain untouched. No retraining, retuning, checkpoint
+selection from test scores, commit or push is part of this handoff.
+
+## Exact new source inventory
+
+| File | Responsibility |
+|---|---|
+| `launcher.py` | Fresh CPU inspection, bundle/plan ownership, full bindings, preview/submission, acknowledgment reconciliation, allocation claims, native evaluation dispatch, reservation settlement |
+| `batch.sh` | Existing interpreter/environment, one owning Python PID, native signal delivery |
+| `report.py` | All 30 training observations and 840 expected slots; native coverage and raw histories; complete-set summaries |
+| `figures.py` | Six PNG/PDF plot pairs, including loss, individual seeds/realizations and paired clean-relative views |
+| `HPC_HANDOFF.md` | Future commands and operating restrictions |
+| `REVIEW.md` | Source review, evidence, checks still required and limitations |
+
+`BUNDLE_OWNER.json` is created exclusively **on HPC** by `own-bundle`, then pinned
+along with all six source files and their absolute paths. Every actual import
+from the external bundle is covered; no historical external helper is imported.
+Changing any file after plan freezing rejects new execution. Revisions require a
+separately reviewed new bundle/plan version; preserve unresolved intents first.
+
+## Fixed paths and scope
+
+| Purpose | Absolute path |
+|---|---|
+| Frozen native checkout | `/nfs/hpc/share/bellaak/research/alpha-sweep/alpha-sweep-mobile-eps0316` |
+| Manifest | `/nfs/hpc/share/bellaak/research/alpha-sweep/mobile-eps0316-v1/study.json` |
+| Pilot plan, source of `base_dir` | `/nfs/hpc/share/bellaak/research/alpha-sweep/mobile-eps0316-v1/pilot.json` |
+| Interpreter | `/nfs/hpc/share/bellaak/research/alpha-sweep/alpha-sweep-training/.venv/bin/python` |
+| New external bundle | `/nfs/hpc/share/bellaak/research/alpha-sweep/mobile-all30-eval-launch-v1` |
+| New operational root | `/nfs/hpc/share/bellaak/research/alpha-sweep/mobile-eps0316-evaluation-ops-v1` |
+| Native evaluation root | `/nfs/hpc/share/bellaak/research/alpha-sweep/mobile-eps0316-evaluations-v1` |
+| Separately copied export | `/nfs/hpc/share/bellaak/research/alpha-sweep/mobile-all30-eval-evidence-v1` |
+
+The exported pilot records base directory
+`/nfs/hpc/share/bellaak/research/alpha-sweep/main-v1`. The operator derives it from
+the **actual** validated pilot, compares the export and pins it; it never derives
+it from the study directory. Linked/overlapping output paths reject execution.
+
+Indices 0–29 map to `(ALPHAS[index // 3], index % 3)` for
+`0,.01,.02,.05,.1,.2,.3,.5,.75,1`. Each owns one validation-selected best
+checkpoint and all native slots: clean replicate 0, nine positive alphas with
+replicates 1–3. There are 30 checkpoints, 28 slots each, 840 full 10,000-image
+passes. No accuracy threshold excludes a run. The full native binding, including
+generation/digest, earliest validation selection, scientific identity, data,
+protocol and original provenance, is forwarded as `expected_binding`.
+
+## Transfer after separate authorization
+
+These Windows PowerShell commands copy only the new external source and the
+original review evidence. Set `$HpcHost` to your established OSU SSH target; this
+handoff does not guess a login hostname. Stop if either destination exists.
+
+```powershell
+$HpcHost = Read-Host 'Established OSU SSH target (user@host)'
+$TaskRoot = 'C:\Users\akaas\RESEARCH\alpha-sweep-training\.handoff-worktrees\mobile-all30-evaluation'
+ssh $HpcHost 'test ! -e /nfs/hpc/share/bellaak/research/alpha-sweep/mobile-all30-eval-launch-v1'
+if ($LASTEXITCODE -ne 0) { throw 'Bundle destination exists or SSH check failed' }
+ssh $HpcHost 'test ! -e /nfs/hpc/share/bellaak/research/alpha-sweep/mobile-all30-eval-evidence-v1'
+if ($LASTEXITCODE -ne 0) { throw 'Evidence destination exists or SSH check failed' }
+scp -r "$TaskRoot\operators\mobile_all30_evaluation_v1" "${HpcHost}:/nfs/hpc/share/bellaak/research/alpha-sweep/mobile-all30-eval-launch-v1"
+if ($LASTEXITCODE -ne 0) { throw 'Partial bundle transfer: preserve and inspect it' }
+scp -r "$TaskRoot\handoff-evidence\mobile-all30-review" "${HpcHost}:/nfs/hpc/share/bellaak/research/alpha-sweep/mobile-all30-eval-evidence-v1"
+if ($LASTEXITCODE -ne 0) { throw 'Partial evidence transfer: preserve and inspect it' }
+```
+
+Check transferred hashes against the local source inventory and the evidence's
+`CHECKSUMS.json` before invoking copied code. Do not merge this operator into the
+native checkout or overwrite/reuse the old six-file training operator.
+
+## CPU: read actual inputs and inspect current HPC policy
+
+Use the existing compatible environment on an approved CPU/controller host. No
+model or CUDA runtime is constructed by these CPU commands. Actual checkpoint
+binding can read substantial CPU checkpoint data and should not be repeated in
+an unbounded loop on a login host.
+
+```bash
+set -euo pipefail
+BASE=/nfs/hpc/share/bellaak/research/alpha-sweep
+NATIVE="$BASE/alpha-sweep-mobile-eps0316"
+STUDY="$BASE/mobile-eps0316-v1"
+OP="$BASE/mobile-all30-eval-launch-v1"
+EVIDENCE="$BASE/mobile-all30-eval-evidence-v1"
+OPS="$BASE/mobile-eps0316-evaluation-ops-v1"
+EVAL="$BASE/mobile-eps0316-evaluations-v1"
+PY="$BASE/alpha-sweep-training/.venv/bin/python"
+export PYTHONPATH="$NATIVE/src"
+export CUBLAS_WORKSPACE_CONFIG=:4096:8
+unset OMP_NUM_THREADS MKL_NUM_THREADS OPENBLAS_NUM_THREADS NUMEXPR_NUM_THREADS VECLIB_MAXIMUM_THREADS
+"$PY" -B "$OP/launcher.py" own-bundle
+"$PY" -B "$OP/launcher.py" inspect-inputs --export-bindings "$EVIDENCE/data/evaluation_bindings.json"
+```
+
+`own-bundle` is a one-time exclusive write to the new bundle; `inspect-inputs` is
+read-only. The latter reports mismatches and exits 22 if any exported binding
+differs. There is no mismatch override. Resolve differences before freezing.
+
+Read the actual native parsers at the frozen source. Their exact commands are:
+
+```bash
+"$PY" -B -m alpha_sweep_training.controller evaluation-plan --manifest "$STUDY/study.json"
+"$PY" -B -m alpha_sweep_training.controller evaluation-inspect --manifest "$STUDY/study.json" \
+  --global-index 0 --base-dir "$BASE/main-v1" --evaluation-root "$EVAL"
+"$PY" -B -m alpha_sweep_training.controller evaluation-status --manifest "$STUDY/study.json" \
+  --base-dir "$BASE/main-v1" --evaluation-root "$EVAL"
+```
+
+The pinned native `evaluation-plan` / `evaluation-status` implementation derives
+its expected total from the actual manifest size: this profile has 30 tasks and
+840 slots. The parser help still mentions the original 6,720-slot grid; it does
+not change this study's size. Preserve per-checkpoint native 28-slot authorities.
+The external wrapper uses the direct evaluation API for full binding and signal
+handoff, rather than the native `controller evaluate` CLI.
+
+Create a **new** inspection evidence directory. Replace `ACCOUNT` only after
+checking your actual association; no historical account/node/QOS is an entitlement.
+
+```bash
+INSPECT="$BASE/mobile-all30-eval-inspection-$(date -u +%Y%m%dT%H%M%SZ)"
+mkdir "$INSPECT"
+sacctmgr -nP show assoc where user="$USER" format=Cluster,Account,User,Partition,QOS,DefaultQOS > "$INSPECT/accounts.txt"
+scontrol show partition dgxh >> "$INSPECT/accounts.txt"
+sacctmgr -nP show qos format=Name,MaxWall,MaxTRESPU,GrpTRES >> "$INSPECT/accounts.txt"
+sinfo -p dgxh -N -o '%N|%f|%G|%t|%m|%c' > "$INSPECT/nodes.txt"
+scontrol show nodes >> "$INSPECT/nodes.txt"
+squeue --array --format='%i|%u|%a|%P|%q|%T|%j|%R' > "$INSPECT/active-work.txt"
+df -h "$BASE" > "$INSPECT/storage.txt"
+quota -s >> "$INSPECT/storage.txt"
+```
+
+Inspect account/QOS limits, shared project work under all users/accounts, node
+features/GRES, accessible storage/quota and **evaluation-specific** wall-time
+evidence. Write `walltime.txt` explaining the chosen request and its evidence.
+No timing claim or default wall time is introduced here. If site commands or
+accounting fields are unavailable, obtain administrator evidence and leave
+execution blocked until the corresponding assumption is verified.
+
+Write `$INSPECT/inspection.json` as strict JSON, replacing every angle-bracket
+placeholder. Do not copy historical assertions without inspecting current work:
+
+```json
+{
+  "inspected_at_utc": "<current UTC ISO timestamp>",
+  "operator": "<actual operator>",
+  "reason": "<account/QOS, GPU, storage and project reservation review>",
+  "account": "<verified account>",
+  "qos": "<verified QOS>",
+  "partition": "dgxh",
+  "node": "<verified full-H100 node>",
+  "gres": "<verified one-GPU request, e.g. gpu:1>",
+  "concurrency": 4,
+  "other_project_reserved_tasks": 0,
+  "all_prior_submissions_resolved": true,
+  "exclusive_project_window": true,
+  "wall_time": "<reviewed HH:MM:SS greater than 00:05:00>",
+  "evidence_files": {
+    "accounts": "<absolute inspection directory>/accounts.txt",
+    "nodes": "<absolute inspection directory>/nodes.txt",
+    "active_work": "<absolute inspection directory>/active-work.txt",
+    "storage": "<absolute inspection directory>/storage.txt",
+    "walltime": "<absolute inspection directory>/walltime.txt"
+  }
+}
+```
+
+Four is the approved project-wide maximum. Set concurrency lower when any other
+stage has reserved capacity. All queued tasks, unresolved submissions and work
+on other accounts must be included in the operator's project reservation review.
+The launcher independently counts every queued/active task in the selected
+account, conservatively including unrelated account users. It rejects a count
+above `other_project_reserved_tasks`. A reservation agreement must prevent other
+launchers/stages from adding work during this window; this new operator cannot
+control historical launchers or people submitting outside its registry.
+
+Inspection must be no more than 15 minutes old at prepare/submission. Refresh to
+a **new** directory before subsequent submissions. Combined limits are one GPU,
+eight CPUs and 32 GB per task; maximum total resources are the per-task requests
+times chosen concurrency, with each task's reviewed wall time. These are requested
+resources, not measured needs or guaranteed QOS entitlements.
+
+## CPU: freeze, validate, preview, then explicit submission
+
+Freezing creates only the separate operational root, never an evaluation result.
+The supplied export alone cannot freeze a plan; actual native binding runs first.
+
+```bash
+"$PY" -B "$OP/launcher.py" prepare --export-bindings "$EVIDENCE/data/evaluation_bindings.json" \
+  --inspection "$INSPECT/inspection.json"
+PLAN="$OPS/plan.json"
+"$PY" -B "$OP/launcher.py" validate --plan "$PLAN"
+"$PY" -B "$OP/launcher.py" submit --plan "$PLAN" --wave all30-first \
+  --inspection "$INSPECT/inspection.json" --indices 0-29 \
+  --reason 'Reviewed initial evaluation of all thirty selected checkpoints'
+```
+
+Preview performs no submission or intent write. Read the returned exact argv.
+It includes `--array=0,1,...,29%N`, one GPU/process, `--signal=B:USR1@300`,
+`--no-requeue`, exact environment paths, job name/comment, and separate logs.
+Only after source/CPU-wiring verification and explicit operational authorization:
+
+```bash
+"$PY" -B "$OP/launcher.py" submit --plan "$PLAN" --wave all30-first \
+  --inspection "$INSPECT/inspection.json" --indices 0-29 \
+  --reason 'Operator-approved initial all-thirty evaluation' \
+  --confirmed-project-window --execute
+```
+
+This is the **only** command that calls `sbatch`; it has not been invoked.
+Submission acquires the controller lock, rejects every unresolved earlier wave,
+rechecks native pins/checkpoint coverage/inspection/queue, and persists the exact
+sealed intent **before** `sbatch --parsable`. Response and actual array ID are
+exclusive separate records. Unknown acknowledgment keeps capacity reserved.
+
+## GPU: allocation behavior
+
+The batch shell `exec`s the owning Python process. Native
+`allocation_signal_handlers(StopRequest())` are installed before allocation
+validation; handlers only update stop state. Allocation identity and one
+independent per-index claim must match the sealed intent. Runtime checks require
+the recorded full H100 80GB HBM3, capability 9.0 and 85,009,367,040 bytes; MIG and
+different devices reject. Existing Python 3.11.15, Torch 2.5.1+cu124,
+TorchVision 0.20.1+cu124, NumPy 1.26.4, PyYAML 6.0.3, CUDA 12.4 and cuDNN 90100,
+BF16 autocast, FP32 master/loss/noise and deterministic TF32-disabled backend
+must match. No model, optimizer, scheduler or scaler is built by the wrapper;
+its runtime preflight uses `evaluation_only=True`.
+
+The native evaluator owns models/test loaders/leases/results. All-slot selectors
+are `None`; default failed retry and legacy-clean reuse are false. Successes are
+validated and skipped, partial passes restart from their original prescribed
+realization, failures retain history, and native nonzero exits propagate. One
+fixed native perturbation covers each entire official test pass. No controller
+recovery or training invocation occurs on GPU.
+
+## Monitor and reconcile without blind resubmission
+
+Get the actual array ID from `waves/all30-first/ack.json`, parsed losslessly:
+
+```bash
+JOB=$("$PY" -B -c 'import json,sys; print(json.load(open(sys.argv[1]))["array_job_id"])' \
+  "$OPS/waves/all30-first/ack.json")
+squeue --array -j "$JOB"
+sacct -X -j "$JOB" --format=JobID%80,State%80,ExitCode,Elapsed,MaxRSS,AllocTRES -P
+"$PY" -B -m alpha_sweep_training.controller evaluation-status --manifest "$STUDY/study.json" \
+  --base-dir "$BASE/main-v1" --evaluation-root "$EVAL"
+```
+
+If acknowledgment was lost, inspect the preserved intent, unique job
+name/comment, scheduler and accounting; do **not** call `submit` again. Once the
+actual job has been independently identified, save read-only scheduler evidence
+to a new file and use:
+
+```bash
+"$PY" -B "$OP/launcher.py" record-job --plan "$PLAN" --wave all30-first \
+  --job-id "$ACTUAL_VERIFIED_ARRAY_ID" --reason 'Reconciled exact preserved submission intent' \
+  --evidence "$ABSOLUTE_RECONCILIATION_FILE"
+```
+
+This also queries accounting and requires exact per-index job name, account,
+partition and plan-bound comment. Accounting delay or a site that does not store
+job comments blocks reconciliation; administrator assistance is needed. No
+absence-of-queue inference frees reservations. The implementation has no command
+to discard an unacknowledged intent or steal a lock. Partial transfer/ownership/
+plan publication and stale controller/native locks remain evidence requiring
+explicit cross-node ownership review; do not delete them to retry.
+
+After all selected allocations have terminal accounting and verified inactive
+owners across nodes, release only the scheduling reservation:
+
+```bash
+"$PY" -B "$OP/launcher.py" settle --plan "$PLAN" --wave all30-first \
+  --confirmed-inactive-across-nodes --reason 'Verified exact array, all allocations and owners inactive'
+```
+
+Settlement requires every submitted index in terminal accounting and no queued
+member. It does not prove research completion. If `sbatch` definitively rejected
+without creating an array, this version deliberately leaves the wave blocked;
+preserve its intent/response for an audited future no-job-resolution change.
+
+For continuation, inspect native coverage and prior outcome/Slurm evidence first,
+settle the prior wave, obtain fresh inspection, and preview a new named wave with
+the **exact** indices needing work. Example selector syntax is `0,4-6`; replace
+it with the actual reviewed list. Do not copy a list based on accuracy. New
+submissions always require explicit `--execute`, reason and project reservation.
+
+```bash
+"$PY" -B "$OP/launcher.py" submit --plan "$PLAN" --wave continuation-01 \
+  --inspection "$FRESH_INSPECTION_JSON" --indices "$REVIEWED_INDICES" \
+  --reason 'Reviewed clean interruption and remaining native coverage'
+```
+
+Repeat that exact reviewed command with `--confirmed-project-window --execute`
+only after explicit authorization. Failed-slot retries additionally require
+`--retry-failed` and an explicit failure-specific reason, recorded in the new
+intent. Numerical/execution failures are never automatically retried, and poor
+accuracy is never a reason. Original successful slots are retained and skipped.
+
+## CPU: all-30 reporting, then derived figures
+
+After execution is quiescent, choose new output directories outside protected
+stores. These commands write only separate derived outputs:
+
+```bash
+REPORT="$BASE/mobile-all30-eval-report-$(date -u +%Y%m%dT%H%M%SZ)"
+"$PY" -B "$OP/report.py" --plan "$PLAN" --output-dir "$REPORT"
+FIGURES="$BASE/mobile-all30-eval-figures-$(date -u +%Y%m%dT%H%M%SZ)"
+"$PY" -B "$OP/figures.py" --report "$REPORT/report.json" --output-dir "$FIGURES"
+```
+
+`report.json` retains all 840 rows, null checkpoint/seeds on unbound reads,
+explicit conditions/failures, full checkpoint/protocol provenance, native sweep
+completion, committed ancestry, orphan records, attempts and unparsed evidence.
+`slots.csv` is a convenience view; uint64 noise seeds must be read as integers,
+never via spreadsheet/JavaScript floating-point conversion. Native HEADs remain
+the authority. An allocation ending or diagnostic outcome never creates a success.
+
+Positive realizations are averaged **within each training seed first**. Official
+cross-seed summaries require all three seeds and use sample SD (`ddof=1`),
+separately from within-checkpoint realization SD. Clean has one pass/seed and no
+within-checkpoint SD. Validation selects training alpha only when all ten
+three-seed candidates are complete, retaining exact mean ties in grid order.
+
+Figures include ten training-alpha curves for test accuracy and loss; seed/
+realization panels for both metrics; paired accuracy differences in percentage
+points and retention relative to each checkpoint's own clean baseline. Missing
+sets appear as gaps; all raw scores remain in the report. Formulas are explicit,
+with null retention for a zero clean baseline. No AUC or new selection rule is
+introduced. Final group presentations must show each graph type for every model,
+label revised MobileNet epsilon 0.0316 and original other-model recipes, and avoid
+calling population weight SD a flatness measurement. This stage does not evaluate
+other architectures or produce a final all-model presentation.
+
+## CPU wiring verification still required
+
+No new tests were created or run: the repository instruction explicitly forbids
+both. The exact future **real-input CPU inspection/validation commands** are
+`inspect-inputs`, `prepare`, and `validate` above; they are not substitutes for
+mocked wiring tests. Before authorizing execution, separately authorize and add
+the check matrix in `REVIEW.md` in a compatible environment. There is currently
+no new test runner to claim passed or supply as an executable check command.
+Do not run a historical training-operator test command and call it validation of
+this new wrapper. Existing native CUDA/CPU results reported in the ZIP are
+historical evidence only.
