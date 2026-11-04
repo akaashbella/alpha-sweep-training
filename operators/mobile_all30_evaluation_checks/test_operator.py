@@ -75,6 +75,13 @@ class OperatorCase(unittest.TestCase):
         (op.STUDY / "study.json").write_text('{}', encoding="utf-8")
         (op.STUDY / "pilot.json").write_text('{}', encoding="utf-8")
         self.modules = {}
+        self.submitter = {"identity_version": 1, "uid": 24680, "username": "fixture-user"}
+        self.stack.enter_context(patch.object(os, "getuid", return_value=self.submitter["uid"], create=True))
+        self.stack.enter_context(patch.object(os, "geteuid", return_value=self.submitter["uid"], create=True))
+        self.pwd = ModuleType("pwd")
+        self.pwd.getpwuid = Mock(return_value=NS(pw_uid=self.submitter["uid"], pw_name=self.submitter["username"]))
+        self.pwd.getpwnam = Mock(return_value=NS(pw_uid=self.submitter["uid"], pw_name=self.submitter["username"]))
+        self.modules["pwd"] = self.pwd
         package = ModuleType("alpha_sweep_training")
         package.__path__ = []  # Never fall through to a real native package.
         self.modules[package.__name__] = package
@@ -286,7 +293,7 @@ class OperatorCase(unittest.TestCase):
         self.plan = op.prepare(NS(export_bindings=str(export), inspection=str(self.inspection_path)))
         return self.plan
 
-    def wave(self, name="first", selected=None):
+    def wave(self, name="first", selected=None, *, acknowledged=True):
         selected = list(range(30)) if selected is None else selected
         wave = op.wave_path(name)
         wave.mkdir()
@@ -294,10 +301,12 @@ class OperatorCase(unittest.TestCase):
             (wave / part).mkdir()
         observed = op.inspection(self.inspection_path, fresh=True)
         intent = op.seal({"version": op.VERSION, "plan_sha256": self.plan["document_sha256"], "wave": name,
+                          "submitter": deepcopy(self.plan["submitter"]),
                           "inspection": observed, "indices": selected, "retry_failed": False, "reason": "CPU fixture",
                           "argv": op.argv_for(self.plan, wave, observed, selected)})
         op.publish(wave / "intent.json", intent)
-        op.acknowledge(self.plan, wave, "12345", "CPU fixture", None)
+        if acknowledged:
+            op.acknowledge(self.plan, wave, "12345", "CPU fixture", None)
         return wave
 
     def worker_environment(self, index):
@@ -711,9 +720,234 @@ class WiringChecks(OperatorCase):
         result = op.preview_or_submit(self.submit_args(execute=False, retry_failed=True, reason="Reviewed fixture failure"))
         self.assertTrue(result["retry_failed"])
 
-    def test_unreserved_account_work_blocks_before_intent(self):
+    def test_unreserved_submitting_user_work_blocks_before_intent(self):
         self.prepare_plan()
         with patch.object(op, "queue", return_value=[{"job": "other"}]):
             with self.assertRaisesRegex(ValueError, "exceeds reserved"):
                 op.preview_or_submit(self.submit_args())
         self.assertEqual(list((op.OPS / "waves").iterdir()), [])
+
+
+class QueueScopeChecks(OperatorCase):
+    def reservations(self, concurrency, other):
+        value = op.read(self.inspection_path)
+        value.update(concurrency=concurrency, other_project_reserved_tasks=other)
+        self.inspection_path.write_text(json.dumps(value), encoding="utf-8")
+
+    def queue_line(self, job, *, account="eecs", username=None, uid=None, state="RUNNING"):
+        username = self.submitter["username"] if username is None else username
+        uid = self.submitter["uid"] if uid is None else uid
+        return f"{job}|{state}|{username}|{uid}|{account}|fixture-job"
+
+    def scheduler(self, queue_lines=(), accounting_lines=(), *, filter_user=False):
+        """A local scheduler boundary; no real subprocess can escape this mock."""
+        def run(argv, **kwargs):
+            if argv[0] == "squeue":
+                self.assertIn(f"--user={self.submitter['uid']}", argv)
+                self.assertIn("--array", argv)
+                self.assertIn("--states=all", argv)
+                self.assertIn("--all", argv)
+                self.assertFalse(any(a.startswith("--account") for a in argv))
+                lines = list(queue_lines)
+                if filter_user:
+                    lines = [line for line in lines if line.split("|")[3] == str(self.submitter["uid"])]
+                return NS(stdout="\n".join(lines), stderr="", returncode=0)
+            if argv[0] == "sacct":
+                self.assertIn(f"--user={self.submitter['uid']}", argv)
+                self.assertFalse(any(a.startswith("--account") for a in argv))
+                return NS(stdout="\n".join(accounting_lines), stderr="", returncode=0)
+            self.assertEqual(argv[0], "sbatch")
+            intent = op.check(op.read(op.OPS / "waves/first/intent.json"))
+            self.assertEqual(intent["argv"], argv)
+            self.assertEqual(intent["submitter"], self.submitter)
+            return NS(stdout="12345\n", stderr="", returncode=0)
+        return patch.object(op.subprocess, "run", side_effect=run)
+
+    def settlement_args(self):
+        return NS(plan=str(op.OPS / "plan.json"), wave="first", reason="CPU fixture inactive evidence",
+                  confirmed_inactive_across_nodes=True)
+
+    def accounting_line(self, index, *, username=None, uid=None, state="COMPLETED"):
+        username = self.submitter["username"] if username is None else username
+        uid = self.submitter["uid"] if uid is None else uid
+        return f"12345_{index}|{state}|0:0|{username}|{uid}"
+
+    def test_shared_eecs_backlog_does_not_consume_project_reservation(self):
+        self.prepare_plan()
+        unrelated = [self.queue_line(str(100000 + i), username="other-user", uid=30000 + i) for i in range(1453)]
+        with self.scheduler(unrelated, filter_user=True) as scheduler:
+            record = op.preview_or_submit(self.submit_args())
+        self.assertEqual(record["array_job_id"], "12345")
+        self.assertEqual([c.args[0][0] for c in scheduler.call_args_list], ["squeue", "sbatch"])
+        intent = op.read(op.OPS / "waves/first/intent.json")
+        self.assertEqual(intent["queue"], [])
+        self.assertEqual((intent["inspection"]["record"]["concurrency"],
+                          intent["inspection"]["record"]["other_project_reserved_tasks"]), (4, 0))
+
+    def test_submitting_user_work_across_accounts_counts_against_reservations(self):
+        self.prepare_plan()
+        self.reservations(2, 2)
+        lines = [self.queue_line("100", account="eecs"), self.queue_line("101", account="another-account", state="PENDING")]
+        with self.scheduler(lines):
+            op.preview_or_submit(self.submit_args())
+        intent = op.read(op.OPS / "waves/first/intent.json")
+        self.assertEqual({row["account"] for row in intent["queue"]}, {"eecs", "another-account"})
+        self.assertEqual(len(intent["queue"]), 2)
+
+    def test_expanded_pending_array_elements_are_counted_individually(self):
+        self.prepare_plan()
+        self.reservations(1, 3)
+        lines = [self.queue_line(f"100_{i}", account="another-account", state="PENDING") for i in range(4)]
+        with self.scheduler(lines) as scheduler:
+            rows = op.queue(self.plan["submitter"])
+            self.assertEqual([row["index"] for row in rows], [0, 1, 2, 3])
+            self.assertEqual({row["array"] for row in rows}, {"100"})
+            with self.assertRaisesRegex(ValueError, "exceeds reserved"):
+                op.preview_or_submit(self.submit_args())
+        self.assertTrue(all(c.args[0][0] == "squeue" for c in scheduler.call_args_list))
+        self.assertEqual(list((op.OPS / "waves").iterdir()), [])
+
+    def test_collaborator_work_remains_explicitly_reserved(self):
+        self.prepare_plan()
+        self.reservations(2, 2)  # One discovered owner task plus one collaborator reservation.
+        lines = [self.queue_line("100", account="another-account"),
+                 self.queue_line("101", username="collaborator", uid=40000)]
+        with self.scheduler(lines, filter_user=True):
+            op.preview_or_submit(self.submit_args())
+        intent = op.read(op.OPS / "waves/first/intent.json")
+        self.assertEqual(len(intent["queue"]), 1)
+        self.assertEqual(intent["inspection"]["record"]["other_project_reserved_tasks"], 2)
+        self.assertEqual(intent["inspection"]["record"]["concurrency"], 2)
+
+    def test_excess_reservations_cannot_be_used_to_absorb_account_backlog(self):
+        self.prepare_plan()
+        for concurrency, other in ((4, 1), (1, 4), (1, 1453)):
+            with self.subTest(concurrency=concurrency, other=other):
+                self.reservations(concurrency, other)
+                with self.assertRaisesRegex(ValueError, "at most four"):
+                    op.preview_or_submit(self.submit_args())
+        self.assertEqual(list((op.OPS / "waves").iterdir()), [])
+
+    def test_queue_filters_cannot_be_inherited_from_environment(self):
+        poisoned = {"USER": "somebody-else", "SQUEUE_ACCOUNT": "eecs", "SQUEUE_PARTITION": "dgxh",
+                    "SQUEUE_USERS": "somebody-else", "SQUEUE_STATES": "RUNNING", "SLURM_CLUSTERS": "other-cluster"}
+        with patch.dict(os.environ, poisoned), self.scheduler([self.queue_line("100", account="elsewhere")]) as scheduler:
+            rows = op.queue(self.submitter)
+        self.assertEqual(len(rows), 1)
+        env = scheduler.call_args.kwargs["env"]
+        self.assertFalse(any(k.startswith("SQUEUE_") for k in env))
+        self.assertNotIn("SLURM_CLUSTERS", env)
+
+    def test_queue_parse_and_identity_errors_fail_closed(self):
+        invalid = ["garbled", self.queue_line("100_[0-3]"), self.queue_line("100+0"),
+                   self.queue_line("100", state="UNRECOGNIZED_STATE"),
+                   self.queue_line("100", username="other-user"), self.queue_line("100", uid=40000),
+                   self.queue_line("100", uid="not-a-uid"),
+                   self.queue_line("100") + "\n" + self.queue_line("100"),
+                   self.queue_line("100") + "\nmalformed"]
+        for lines in invalid:
+            with self.subTest(lines=lines), self.scheduler(lines.splitlines()):
+                with self.assertRaises(ValueError):
+                    op.queue(self.submitter)
+
+    def test_plan_pins_os_identity_even_with_misleading_user_environment(self):
+        with patch.dict(os.environ, {"USER": "other-user", "LOGNAME": "other-user"}):
+            self.prepare_plan()
+            self.assertEqual(self.plan["submitter"], self.submitter)
+            with self.scheduler([]):
+                op.preview_or_submit(self.submit_args())
+        self.assertEqual(op.read(op.OPS / "waves/first/intent.json")["submitter"], self.submitter)
+
+    def test_terminal_queue_rows_do_not_count_but_live_states_still_reserve(self):
+        lines = [self.queue_line(str(i + 100), state=state) for i, state in enumerate(
+                 ("PENDING", "RUNNING", "COMPLETING", "SUSPENDED", "COMPLETED", "FAILED"))]
+        with self.scheduler(lines):
+            rows = op.queue(self.submitter)
+        self.assertEqual([r["state"] for r in rows], ["PENDING", "RUNNING", "COMPLETING", "SUSPENDED"])
+
+    def test_changed_os_identity_blocks_submission_and_allocation(self):
+        self.prepare_plan()
+        wave = self.wave(selected=[0])
+        other = NS(pw_uid=40000, pw_name="other-user")
+        self.binder.reset_mock()
+        with patch.object(os, "getuid", return_value=40000), patch.object(os, "geteuid", return_value=40000), \
+             patch.object(self.pwd, "getpwuid", return_value=other), patch.object(self.pwd, "getpwnam", return_value=other):
+            with self.assertRaisesRegex(ValueError, "OS submitter identity"):
+                op.preview_or_submit(self.submit_args(wave="second"))
+            with patch.dict(os.environ, self.worker_environment(0), clear=True):
+                with self.assertRaisesRegex(ValueError, "OS submitter identity"):
+                    op.allocation(self.plan, wave, 0)
+        self.binder.assert_not_called()
+        self.assertEqual(list((wave / "claims").iterdir()), [])
+        self.assertFalse((op.OPS / "waves/second").exists())
+
+    def test_effective_uid_and_account_database_mismatches_fail_closed(self):
+        with patch.object(os, "geteuid", return_value=40000):
+            with self.assertRaisesRegex(ValueError, "Real/effective"):
+                op.os_identity()
+        with patch.object(self.pwd, "getpwnam", return_value=NS(pw_uid=40000, pw_name="other-user")):
+            with self.assertRaisesRegex(ValueError, "round trip"):
+                op.os_identity()
+        with patch.object(self.pwd, "getpwuid", side_effect=KeyError("unknown UID")):
+            with self.assertRaises(KeyError):
+                op.os_identity()
+
+    def test_unpinned_historical_plan_rejects_without_rewriting_it(self):
+        self.prepare_plan()
+        path = op.OPS / "plan.json"
+        legacy = {k: v for k, v in self.plan.items() if k not in ("document_sha256", "submitter")}
+        path.write_text(op.canonical(op.seal(legacy)), encoding="utf-8")
+        before = path.read_bytes()
+        with self.assertRaisesRegex(ValueError, "OS submitter pin"):
+            op.load_plan(path)
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_settlement_uses_owner_scope_across_accounts_and_checks_accounting_owner(self):
+        self.prepare_plan()
+        wave = self.wave(selected=[0, 1])
+        lines = [self.queue_line("999", account="another-account")]
+        with self.scheduler(lines, [self.accounting_line(0), self.accounting_line(1, state="TIMEOUT")]):
+            record = op.settle(self.settlement_args())
+        self.assertEqual(record["submitter"], self.submitter)
+        self.assertEqual(record["queue"][0]["account"], "another-account")
+        self.assertFalse(record["scientific_completion_authority"])
+        self.assertEqual(op.validate_settlement(wave, self.plan), record)
+
+    def test_active_array_or_unparseable_queue_blocks_settlement(self):
+        self.prepare_plan()
+        wave = self.wave(selected=[0])
+        for lines in ([self.queue_line("12345_0", account="another-account")], ["unparseable"]):
+            with self.subTest(lines=lines), self.scheduler(lines) as scheduler:
+                with self.assertRaises(ValueError):
+                    op.settle(self.settlement_args())
+                self.assertTrue(all(c.args[0][0] == "squeue" for c in scheduler.call_args_list))
+        self.assertFalse((wave / "settled.json").exists())
+
+    def test_missing_malformed_nonterminal_or_wrong_owner_accounting_keeps_reservation(self):
+        self.prepare_plan()
+        wave = self.wave(selected=[0])
+        for lines in ([], ["garbled"], [self.accounting_line(0, username="other-user", uid=40000)],
+                      [self.accounting_line(0, state="RUNNING")], [self.accounting_line(0), "garbled"],
+                      ["12345|RUNNING|0:0|fixture-user|24680", self.accounting_line(0)],
+                      ["12345|COMPLETED|garbled|fixture-user|24680", self.accounting_line(0)]):
+            with self.subTest(lines=lines), self.scheduler([], lines):
+                with self.assertRaises(ValueError):
+                    op.settle(self.settlement_args())
+        self.assertFalse((wave / "settled.json").exists())
+
+    def test_reconciliation_requires_scheduler_owner_and_full_exact_mapping(self):
+        self.prepare_plan()
+        wave = self.wave(selected=[0], acknowledged=False)
+        evidence = self.root / "reconciliation.txt"
+        evidence.write_text("CPU fixture", encoding="utf-8")
+        comment = f"{op.VERSION}:{self.plan['document_sha256']}:first"
+        prefix = f"12345_0|mobile-eval-first|fixture|dgxh|{comment}"
+        for line in (prefix + "|other-user|40000", prefix + "|fixture-user|24680\ngarbled"):
+            with self.subTest(line=line), self.scheduler([], line.splitlines()):
+                with self.assertRaises(ValueError):
+                    op.acknowledge(self.plan, wave, "12345", "Reviewed exact intent", evidence)
+            self.assertFalse((wave / "ack.json").exists())
+        with self.scheduler([], [prefix + "|fixture-user|24680"]):
+            record = op.acknowledge(self.plan, wave, "12345", "Reviewed exact intent", evidence)
+        self.assertEqual(record["submitter"], self.submitter)
+        self.assertFalse((wave / "settled.json").exists())

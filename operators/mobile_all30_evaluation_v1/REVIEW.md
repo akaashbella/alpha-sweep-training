@@ -3,8 +3,8 @@
 Revised November 4, 2026 on Windows. Worktree:
 `C:\Users\akaas\RESEARCH\alpha-sweep-training\.handoff-worktrees\mobile-all30-evaluation`;
 branch `ops/mobile-all30-evaluation-v1`, HEAD
-`c910d0c626593594537b8e14f971c063acf56311`. The original six-file handoff was
-committed/pushed in the previous authorized task. This scoped revision authorizes
+`0dafef07d0b379cf8c2f47eb6868db4319aaf8fe`. The prior reporting correction and
+CPU checks were committed/pushed in the previous authorized task. This queue-scoping revision authorizes
 CPU tests, test-related imports and syntax checks, and remains uncommitted and
 unpushed. It authorizes no HPC operations, installs or research execution.
 
@@ -58,17 +58,14 @@ evaluation contracts were also read. No scientific constants were changed.
 The runtime inventory remains exactly the original six files, listed in
 `HPC_HANDOFF.md`. This revision changes only:
 
-- `operators/mobile_all30_evaluation_v1/report.py`
-- `operators/mobile_all30_evaluation_v1/figures.py`
+- `operators/mobile_all30_evaluation_v1/launcher.py`
 - `operators/mobile_all30_evaluation_v1/HPC_HANDOFF.md`
 - `operators/mobile_all30_evaluation_v1/REVIEW.md`
-
-New support, outside the strict runtime inventory:
-
-- `operators/mobile_all30_evaluation_checks/run_cpu_checks.py`
 - `operators/mobile_all30_evaluation_checks/test_operator.py`
 
-`launcher.py`, `batch.sh`, and all native source retain their bytes. Existing
+No new files. CPU support remains outside the six-file runtime inventory.
+`run_cpu_checks.py`, `batch.sh`, `report.py`, `figures.py` and all native source
+retain their bytes. Existing
 untracked `handoff-evidence/` remains untouched; no new scientific artifacts exist.
 New operational output namespaces have exclusive ownership, per-file/path pins,
 full best bindings, finite sealed JSON and POSIX durable exclusive publication.
@@ -88,8 +85,9 @@ root. Intents precede `sbatch`, acknowledgments are separate, workers independen
 claim exact index/array identities, and only explicit audited commands can submit
 another settled wave or retry failed slots. The project reservation agreement
 and fresh current evidence cover nonparticipating legacy stages; the operator
-cannot force unrelated launchers to honor its lock. Account queue checks are
-deliberately conservative. Scheduler settlement never proves scientific success.
+cannot force unrelated launchers to honor its lock. Queue discovery now checks
+only the pinned submitting user's jobs across accounts, while manual reservations
+cover project work beyond that scope. Scheduler settlement never proves scientific success.
 
 All 840 expected observations remain in reporting, including unbound reads and
 null metrics, native failures, orphan evidence and histories. Summary means require
@@ -128,6 +126,42 @@ recomputes summaries from explicit raw verification flags, ignores cached
 measurements, and checks individual-point flags. Old reports without the new
 `verification_version: 1` marker fail closed before plot output creation.
 
+## OS identity and queue correction
+
+The user reported a shared `eecs` backlog of 1,453 tasks. Previously the entire
+account was counted against at most three outside reservations. No live HPC
+inspection was performed in this task; the reported count is task context, not a
+new measurement. The correction changes only external operational policy.
+
+New plans pin the real/effective OS UID and a verified UID/name account-database
+round trip. Neither inherited `USER`/`LOGNAME` nor the free-text inspection
+`operator` field authorizes execution. Submission, allocation, reconciliation and
+settlement verify the actual OS identity. The pin is carried through intent,
+acknowledgment, observed-array, claim and settlement records. Older plans/intents
+without it reject new execution; none are rewritten, adopted or repaired.
+
+The user query has no account filter, expands arrays, includes all partitions
+and states on the configured local cluster, and checks returned UID and username.
+Known live/held/suspended/completing states count separately per array element;
+known terminal records are excluded from the live count. Unknown states, malformed
+or compressed IDs, duplicates, query errors and identity disagreement fail closed.
+Inherited `SQUEUE_*` filters and `SLURM_CLUSTERS` are removed from the query
+environment. Accounting queries similarly clear `SACCT_*` filters, select the
+pinned UID and validate owner fields as well as exact array mapping.
+
+`concurrency + other_project_reserved_tasks <= 4` is unchanged. Every discovered
+live task of the submitter across accounts must fit the explicit outside-work
+reservation. Collaborator-owned tasks, other clusters and ambiguous submissions
+still require independently reviewed reservations and a project-wide exclusive
+window; discovery cannot infer those automatically. Unrelated EECS users no
+longer enter this count. Unrelated work of the submitting user still counts
+conservatively. The unresolved-wave and lost-acknowledgment rules remain
+independent of an empty queue or a terminal state, and settlement still needs
+complete terminal accounting and explicit cross-node owner inactivity.
+
+References checked without contacting HPC: [squeue options/fields](https://slurm.schedmd.com/squeue.html)
+and [sacct owner/accounting fields](https://slurm.schedmd.com/sacct.html).
+
 ## Local verification
 
 The executable command, from the review worktree, is:
@@ -140,11 +174,13 @@ Environment: Windows, `C:\Python313\python.exe`, Python **3.13.12**. The runner
 uses only stdlib and local readable source. It performs in-memory syntax checks
 and Python 3.11 grammar parsing for all five Python runtime/support files, then
 runs the mocked unittest suite. It writes no bytecode. The final run passed
-**28 tests in 40.272 seconds**, plus syntax and Python 3.11 grammar checks for
-**five Python files**. `git diff --check` also passed. No pinned Torch/TorchVision
-installation was required. This is a local Windows result, not an HPC result.
+**44 tests in 52.731 seconds**: all **28 existing tests** plus **16 new queue,
+identity, reservation, reconciliation and settlement checks**. Syntax and Python
+3.11 grammar checks passed for **five Python files**. `git diff --check` passed.
+No pinned Torch/TorchVision installation was required. These are local Windows
+results, not HPC results; no POSIX host identity or live Slurm state was inspected.
 
-The first run had 20 passes and one failure: permission-denied binding reads were
+During the earlier reporting task, the first run had 20 passes and one failure: permission-denied binding reads were
 mislabelled `incompatible`. The fix gives I/O exception types precedence, so
 permission errors are `unreadable` and binding mismatches remain `incompatible`.
 The suite was then expanded for plotting calls, read-only evidence, post-preflight
@@ -162,20 +198,35 @@ binding/runtime changes and final-read errors. No unrun check is counted as pass
 | Integer JSON | `2**64 - 59` survives real exclusive publication/read/seal and is forwarded unchanged |
 | Signals/outcomes | Real source StopRequest/signal context with mocked registration forwards the same stop request and preserves native exit codes 10/20/21/22 |
 | Submission | Mock sbatch observes an already durable exact intent; acknowledgment persisted; timeout leaves unresolved capacity and blocks repeated/new waves without another sbatch |
-| Ownership/concurrency | Real temporary exclusive owner/publication, controller contention, no-write preview, excess account work rejection and explicit-only failed retry |
+| Ownership/concurrency | Real temporary exclusive owner/publication, controller contention, no-write preview, excess submitting-user work rejection and explicit-only failed retry |
 | Read-only reporting | Raw temporary scientific-evidence bytes unchanged; collector cannot call publication/ownership functions |
+| Shared-account scope | 1,453 unrelated EECS user tasks do not consume reservations; submitting-user work under multiple accounts counts; expanded pending array elements each count |
+| OS identity | Actual kernel/account-database pin despite misleading environment; changed UID/name, effective UID, failed lookup, reverse mapping and unpinned legacy plan rejection |
+| Four-task limit | Outside collaborator reservations retained; combined totals above four reject; user queue in excess of reserved capacity rejects before any intent |
+| Queue parsing | Inherited filters cleared; unknown states, malformed/compressed/duplicate jobs and returned UID/name mismatch reject; terminal rows do not count as live |
+| Settlement/reconciliation | User-scoped discovery across accounts; exact owned accounting; active target arrays, missing/malformed/nonterminal/wrong-owner evidence retain reservations; unrelated owner jobs do not stop another array's valid settlement |
 
 These are external wiring/regression tests, not tests of native GPU numerics,
 native checkpoint parsing, scheduler behavior or model evaluation. Fake native
 dependencies intentionally prevent real research computation. Matplotlib is
 mocked; only its call inputs are checked, not actual renderer output. Windows
-mocks directory-fsync because the production primitive is POSIX-only; actual
+mocks UID/account-database calls and directory-fsync because the production
+primitives are POSIX-only; actual
 temporary file writes, hard-link exclusion and ownership remain exercised.
 
 The exact future HPC CPU repeat is documented in `HPC_HANDOFF.md` using
 `run_cpu_checks.py --native-source-root <existing-frozen-checkout>`, with the
 same suite and real POSIX directory-fsync on that host. No HPC command was run
 here. No dependency blocker remains for these pure mocked local checks.
+
+Automatic discovery remains local-cluster/user-scoped. Collaborator-owned work,
+other clusters and uncertain submissions need explicit independently reviewed
+reservations; unrelated work owned by the submitter counts conservatively.
+Unsupported heterogeneous job displays, unknown states or unavailable ownership
+fields block execution for review rather than being treated as zero tasks.
+The suite mocks OS identity and scheduler responses and cannot establish actual
+HPC NSS/UID consistency, scheduler visibility, account entitlement or deployment
+compatibility. Existing plans without the new pin are not migrated or rewritten.
 
 ## Material limitations and blocked operations
 

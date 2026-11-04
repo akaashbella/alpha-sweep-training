@@ -2,7 +2,7 @@
 
 This is an external operator handoff, revised November 4, 2026 from branch
 `ops/mobile-all30-evaluation-v1`, commit
-`c910d0c626593594537b8e14f971c063acf56311`. The user separately authorized local
+`0dafef07d0b379cf8c2f47eb6868db4319aaf8fe`. The user separately authorized local
 CPU tests, test imports and syntax checks for this revision. Mocked checks ran;
 no real checkpoint loads, evaluation, HPC operations, Slurm contact, dependency
 installation or research reporting/plotting ran. No operational command below
@@ -15,7 +15,7 @@ Native source, training artifacts, original epsilon-0.001 study, and historical
 remaining-27 operator/plans remain untouched. No retraining, retuning, checkpoint
 selection from test scores, commit or push is part of this handoff.
 
-## Exact new source inventory
+## External source and check inventory
 
 | File | Responsibility |
 |---|---|
@@ -26,15 +26,17 @@ selection from test scores, commit or push is part of this handoff.
 | `HPC_HANDOFF.md` | Future commands and operating restrictions |
 | `REVIEW.md` | Source review, evidence, checks still required and limitations |
 
-Two new check-support files live **outside** this six-file runtime inventory:
+Two check-support files live **outside** this six-file runtime inventory:
 
 | Sibling directory `../mobile_all30_evaluation_checks/` | Responsibility |
 |---|---|
 | `run_cpu_checks.py` | Standard-library runner; syntax and Python 3.11 grammar checks |
 | `test_operator.py` | Reporting regressions, native API wiring, mocked plotting and temporary operational publication |
 
-This revision modifies `report.py`, `figures.py`, `HPC_HANDOFF.md`, and
-`REVIEW.md`; `launcher.py` and `batch.sh` retain their bytes. Tests do not enter
+This queue-scoping revision modifies `launcher.py`, `HPC_HANDOFF.md`, `REVIEW.md`,
+and the sibling check file `../mobile_all30_evaluation_checks/test_operator.py`.
+`batch.sh`, `report.py`, `figures.py` and `run_cpu_checks.py` retain their bytes.
+The runtime inventory remains six files, with two separate support files. Tests do not enter
 `BUNDLE_FILES` or the deployed runtime directory. Copying test files into that
 directory correctly fails its strict inventory check. The branch contains an
 older full repository snapshot: transfer only the external files and separate
@@ -48,6 +50,8 @@ separately reviewed new bundle/plan version; preserve unresolved intents first.
 Do not copy this revision over an existing pinned runtime bundle or rewrite an
 existing HPC plan. Transfer commands stop at existing destinations; adoption of
 changed hashes into actual operational work remains separately authorized.
+New execution requires a plan with an OS submitter pin. Older plans and intents
+are preserved and rejected rather than silently given a new owner or new code.
 
 ## Fixed paths and scope
 
@@ -149,12 +153,17 @@ checking your actual association; no historical account/node/QOS is an entitleme
 ```bash
 INSPECT="$BASE/mobile-all30-eval-inspection-$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir "$INSPECT"
-sacctmgr -nP show assoc where user="$USER" format=Cluster,Account,User,Partition,QOS,DefaultQOS > "$INSPECT/accounts.txt"
+SUBMIT_UID=$(id -ru)
+SUBMIT_USER=$(id -run)
+sacctmgr -nP show assoc where user="$SUBMIT_USER" format=Cluster,Account,User,Partition,QOS,DefaultQOS > "$INSPECT/accounts.txt"
 scontrol show partition dgxh >> "$INSPECT/accounts.txt"
 sacctmgr -nP show qos format=Name,MaxWall,MaxTRESPU,GrpTRES >> "$INSPECT/accounts.txt"
 sinfo -p dgxh -N -o '%N|%f|%G|%t|%m|%c' > "$INSPECT/nodes.txt"
 scontrol show nodes >> "$INSPECT/nodes.txt"
-squeue --array --format='%i|%u|%a|%P|%q|%T|%j|%R' > "$INSPECT/active-work.txt"
+unset SQUEUE_ACCOUNT SQUEUE_PARTITION SQUEUE_QOS SQUEUE_USERS SQUEUE_NAMES SQUEUE_STATES SQUEUE_FORMAT SQUEUE_FORMAT2 SLURM_CLUSTERS
+id > "$INSPECT/active-work.txt"
+squeue --local --all --array --states=all --user="$SUBMIT_UID" \
+  --format='%i|%u|%U|%a|%P|%q|%T|%j|%R' >> "$INSPECT/active-work.txt"
 df -h "$BASE" > "$INSPECT/storage.txt"
 quota -s >> "$INSPECT/storage.txt"
 ```
@@ -194,14 +203,48 @@ placeholder. Do not copy historical assertions without inspecting current work:
 }
 ```
 
-Four is the approved project-wide maximum. Set concurrency lower when any other
-stage has reserved capacity. All queued tasks, unresolved submissions and work
-on other accounts must be included in the operator's project reservation review.
-The launcher independently counts every queued/active task in the selected
-account, conservatively including unrelated account users. It rejects a count
-above `other_project_reserved_tasks`. A reservation agreement must prevent other
-launchers/stages from adding work during this window; this new operator cannot
-control historical launchers or people submitting outside its registry.
+Four is the approved project-wide maximum:
+`concurrency + other_project_reserved_tasks <= 4`. Reservations are not increased
+to absorb a shared account's backlog. The reported 1,453 EECS tasks owned by
+unrelated users do not belong to this project's automatic queue count.
+
+During plan creation, `submitter` is obtained from the kernel real/effective UID
+and the POSIX account database (`pwd.getpwuid` and a reverse username lookup),
+not from `USER` or `LOGNAME`. The plan pins `identity_version`, numeric `uid` and
+canonical `username`. Different real/effective identities, failed lookups, or
+UID/name disagreement reject creation. Submission/preflight, allocation claims,
+acknowledgment reconciliation and settlement verify that actual OS identity
+against the plan. Intents, acknowledgments, claims and settlement records retain
+the same pin. A changed OS login or a same-name/different-UID login is rejected.
+
+Automatic discovery uses `squeue --local --all --array --states=all --user=<UID>`
+with **no account filter**, so the submitting user's work under every account
+and partition on the configured local cluster is checked. Every pending array
+element is a separate task. Known live/held/suspended/completing states count;
+known terminal rows still visible briefly in `squeue` do not count as live.
+Unknown states, malformed/compressed array output, duplicate jobs or unexpected
+UID/name rows reject the inspection. The code clears all inherited `SQUEUE_*`
+filters and `SLURM_CLUSTERS` before querying; the manual evidence command above
+also clears common filter variables, and its full scope must be reviewed.
+These option/field semantics follow the [official squeue manual](https://slurm.schedmd.com/squeue.html).
+
+Every discovered live task of this user counts conservatively, even if it is
+under a different account or belongs to unrelated work by that same user. Its
+count must fit within `other_project_reserved_tasks`. Automatic discovery does
+not infer project membership and does not discover collaborator-owned work,
+other clusters, or submissions whose acknowledgment is still uncertain. Add
+independently inspected evidence for those cases to `active-work.txt`; reserve
+their full project capacity explicitly in `other_project_reserved_tasks`.
+For example, one discovered owner task plus one collaborator reservation permits
+at most two new concurrent tasks: `2 + 2 = 4`. The outside reservation stays two
+even though only one task was automatically discovered.
+
+All unresolved work must remain reserved. The separate unresolved-wave lock and
+lost-acknowledgment rules still block another wave even when this user's queue is
+empty; terminal queue rows alone never release those reservations. A project
+reservation agreement must prevent other launchers/users/stages from adding
+unreserved work during the window. Discovery is a cross-check, not a complete
+project ledger or an enforcement mechanism over unrelated launchers.
 
 Inspection must be no more than 15 minutes old at prepare/submission. Refresh to
 a **new** directory before subsequent submissions. Combined limits are one GPU,
@@ -286,8 +329,9 @@ to a new file and use:
   --evidence "$ABSOLUTE_RECONCILIATION_FILE"
 ```
 
-This also queries accounting and requires exact per-index job name, account,
-partition and plan-bound comment. Accounting delay or a site that does not store
+This also queries accounting for the pinned UID and requires the exact per-index
+UID/username, job name, account, partition and plan-bound comment. It clears
+inherited `SACCT_*` filters and `SLURM_CLUSTERS`. Accounting delay or a site that does not store
 job comments blocks reconciliation; administrator assistance is needed. No
 absence-of-queue inference frees reservations. The implementation has no command
 to discard an unacknowledged intent or steal a lock. Partial transfer/ownership/
@@ -302,8 +346,15 @@ owners across nodes, release only the scheduling reservation:
   --confirmed-inactive-across-nodes --reason 'Verified exact array, all allocations and owners inactive'
 ```
 
-Settlement requires every submitted index in terminal accounting and no queued
-member. It does not prove research completion. If `sbatch` definitively rejected
+Settlement queries the pinned user's live tasks across accounts and requires no
+live member of the target array, every submitted index in terminal accounting
+with matching UID/username, and explicit cross-node inactivity confirmation.
+Unrelated live jobs of this user remain visible in the settlement snapshot but
+do not prevent settling a different finished array; future submission still has
+to reserve them. Malformed/missing accounting, wrong identities or unknown queue
+states keep capacity reserved. Accounting fields follow the
+[official sacct manual](https://slurm.schedmd.com/sacct.html).
+Settlement does not prove research completion. If `sbatch` definitively rejected
 without creating an array, this version deliberately leaves the wave blocked;
 preserve its intent/response for an audited future no-job-resolution change.
 
@@ -404,9 +455,10 @@ From this review worktree, use standard Python 3.11+:
 python -B operators/mobile_all30_evaluation_checks/run_cpu_checks.py
 ```
 
-Actual local result on Windows / Python 3.13.12: **28 tests passed in 40.272
-seconds**; syntax and Python 3.11 grammar checks passed for all five Python files.
-`git diff --check` passed. No dependency installation, real checkpoint load,
+Actual final local result: **44 tests passed in 52.731 seconds** on Windows /
+Python 3.13.12, including all 28 prior tests and 16 queue/identity/reservation/
+settlement regressions. Syntax and Python 3.11 grammar checks passed for all five
+Python files; `git diff --check` passed. No dependency installation, real checkpoint load,
 Slurm contact, HPC operation or research computation occurred. POSIX behavior and
 the real pinned GPU environment remain unverified here.
 
@@ -416,7 +468,8 @@ It closes the native package namespace to actual research imports and mocks
 Torch/CUDA/runtime/checkpoint/evaluator/Slurm boundaries. The real external
 functions run, as do the stop/signal helpers with mocked signal registration;
 no OS signal is sent. All records and mocked rendering outputs are temporary
-fixtures. Windows mocks POSIX directory-fsync; file writes, exclusive hard-link
+fixtures. POSIX UID/account-database calls are mocked for portable tests; OS
+identity on the actual HPC hosts has not been inspected here. Windows mocks POSIX directory-fsync; file writes, exclusive hard-link
 publication and ownership checks remain real. Linux uses real directory-fsync.
 
 For a future approved HPC CPU repeat, stage a new review directory with only:

@@ -259,19 +259,70 @@ def compare_export(native, path):
     return mismatches
 
 
-def command(argv):
-    return subprocess.run(argv, check=True, capture_output=True, text=True, timeout=45).stdout
+def os_identity():
+    """Resolve the executing POSIX identity from the kernel/account database."""
+    require(hasattr(os, "getuid") and hasattr(os, "geteuid"), "POSIX OS identity is required")
+    import pwd
+    uid, effective = os.getuid(), os.geteuid()
+    require(type(uid) is int and uid >= 0 and type(effective) is int and effective == uid,
+            "Real/effective OS identities must match; do not launch through an identity-changing wrapper")
+    entry = pwd.getpwuid(uid)
+    require(type(entry.pw_name) is str and re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*", entry.pw_name),
+            "OS identity has an unsupported username")
+    same(entry.pw_uid, uid, "OS UID/name lookup")
+    reverse = pwd.getpwnam(entry.pw_name)
+    same([reverse.pw_uid, reverse.pw_name], [uid, entry.pw_name], "OS username/UID round trip")
+    return {"identity_version": 1, "uid": uid, "username": entry.pw_name}
 
 
-def queue(account):
-    """Expand pending array indices; conservatively count every account task."""
-    output = command(["squeue", "--array", "--noheader", f"--account={account}",
-                      "--format=%i|%F|%K|%T|%u|%a|%j"])
-    rows = []
+def submitter_identity(value, *, verify_current=True):
+    require(type(value) is dict and set(value) == {"identity_version", "uid", "username"},
+            "Operational plan needs an OS submitter pin; preserve older plans without rewriting them")
+    same(value["identity_version"], 1, "submitter identity version")
+    require(type(value["uid"]) is int and value["uid"] >= 0 and type(value["username"]) is str
+            and re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*", value["username"]), "Invalid OS submitter pin")
+    if verify_current:
+        same(os_identity(), value, "current OS submitter identity")
+    return value
+
+
+def scheduler_user(username, uid, submitter):
+    require(re.fullmatch(r"\d+", uid or "") is not None, "Unparseable scheduler UID")
+    same([username, int(uid)], [submitter["username"], submitter["uid"]], "scheduler submitter identity")
+
+
+def scheduler_environment(prefix):
+    # Inherited SQUEUE_ACCOUNT/PARTITION/USERS, etc. must not narrow discovery.
+    # Use the configured local cluster, without an inherited cluster selector.
+    return {k: v for k, v in os.environ.items() if not k.startswith(prefix) and k != "SLURM_CLUSTERS"}
+
+
+def command(argv, *, env=None):
+    return subprocess.run(argv, check=True, capture_output=True, text=True, timeout=45, env=env).stdout
+
+
+def queue(submitter):
+    """The pinned user's expanded tasks across accounts on the local cluster."""
+    submitter_identity(submitter)
+    output = command(["squeue", "--local", "--all", "--array", "--noheader", "--states=all",
+                      f"--user={submitter['uid']}", "--format=%i|%T|%u|%U|%a|%j"],
+                     env=scheduler_environment("SQUEUE_"))
+    rows, seen = [], set()
     for line in output.splitlines():
         fields = line.strip().split("|")
-        require(len(fields) == 7 and all(fields), "Unparseable account queue; capacity is unknown")
-        rows.append(dict(zip(("job", "array", "index", "state", "user", "account", "name"), fields)))
+        require(len(fields) == 6 and all(fields), "Unparseable user queue; capacity is unknown")
+        row = dict(zip(("job", "state", "user", "uid", "account", "name"), fields))
+        scheduler_user(row["user"], row["uid"], submitter)
+        match = re.fullmatch(r"([1-9]\d*)(?:_(\d+))?", row["job"])
+        require(match is not None, "Queue must contain separate scalar jobs or expanded array elements")
+        require(row["job"] not in seen, "Duplicate queue job; capacity is unknown")
+        seen.add(row["job"])
+        require(row["state"] in ACTIVE_STATES | TERMINAL, "Unknown queue state; capacity is unknown")
+        if row["state"] in TERMINAL:
+            continue  # Recently finished rows may remain visible in squeue.
+        row.update(array=match[1] if match[2] is not None else None,
+                   index=int(match[2]) if match[2] is not None else None, uid=int(row["uid"]))
+        rows.append(row)
     return rows
 
 
@@ -307,6 +358,7 @@ def inspection(path, *, fresh):
 
 
 def prepare(args):
+    submitter = os_identity()
     native, _, protected = native_inputs()
     mismatches = compare_export(native, args.export_bindings)
     require(not mismatches, "Export/HPC mismatch; resolve before freezing: " + canonical(mismatches))
@@ -315,10 +367,12 @@ def prepare(args):
     protected.extend([args.export_bindings, args.inspection, *(x["path"] for x in observed["evidence"].values())])
     disjoint(HOME, [p for p in protected if plain(p) != plain(HOME)])
     disjoint(EVALUATIONS, protected)
+    submitter_identity(submitter)
     root, owner = claim(OPS, [*protected, EVALUATIONS], "all30_evaluation_plan")
     (root / "waves").mkdir()
     fsync(root)
     plan = seal({"version": VERSION, "root": str(root), "owner": owner, "operator_pin": external_pin,
+                 "submitter": submitter,
                  "native": native, "evaluation_root": str(EVALUATIONS), "indices": list(range(30)),
                  "protected_roots": sorted({str(plain(p)) for p in protected}),
                  "export": {"path": str(plain(args.export_bindings)), "sha256": digest(args.export_bindings)},
@@ -333,6 +387,7 @@ def load_plan(path, *, bind=True):
     path = plain(path)
     same(str(path), str(OPS / "plan.json"), "dedicated fixed operational plan path")
     plan = check(read(path))
+    submitter_identity(plan.get("submitter"), verify_current=bind)
     same([plan["version"], plan["root"], plan["indices"], plan["evaluation_root"]],
          [VERSION, str(OPS), list(range(30)), str(EVALUATIONS)], "all-30 operational scope")
     same(check(read(OPS / "OWNER.json")), plan["owner"], "exclusive operational ownership")
@@ -418,6 +473,7 @@ def continuation_gate(plan, manifest, selected, retry_failed, reason):
 
 def preview_or_submit(args):
     plan, manifest = load_plan(args.plan)
+    submitter_identity(plan["submitter"])
     selected = indices(args.indices)
     observed = inspection(args.inspection, fresh=True)
     wave = wave_path(args.wave)
@@ -440,15 +496,17 @@ def preview_or_submit(args):
         load_plan(args.plan)
         continuation_gate(plan, manifest, selected, args.retry_failed, args.reason)
         same(inspection(args.inspection, fresh=True), observed, "unchanged fresh inspection/evidence")
-        current = queue(observed["record"]["account"])
+        current = queue(plan["submitter"])
         require(len(current) <= observed["record"]["other_project_reserved_tasks"],
-                "Account work exceeds reserved other-project tasks; refresh whole-project evidence")
+                "Submitting user's work exceeds reserved other-project tasks; refresh whole-project evidence")
+        submitter_identity(plan["submitter"])
         wave.mkdir()
         fsync(wave.parent)
         for name in ("logs", "claims", "outcomes"):
             (wave / name).mkdir()
         fsync(wave)
         intent = seal({"version": VERSION, "plan_sha256": plan["document_sha256"], "wave": args.wave,
+                       "submitter": plan["submitter"],
                        "argv": argv, "inspection": observed, "indices": selected,
                        "retry_failed": args.retry_failed, "reason": args.reason,
                        "queue": current, "created_at_utc": datetime.now(timezone.utc).isoformat()})
@@ -468,6 +526,7 @@ def load_intent(plan, wave):
     intent = check(read(wave / "intent.json"))
     same([intent["version"], intent["plan_sha256"], intent["wave"]],
          [VERSION, plan["document_sha256"], wave.name], "intent identity")
+    same(intent.get("submitter"), plan["submitter"], "intent OS submitter pin")
     same(indices(",".join(map(str, intent["indices"]))), intent["indices"], "intent mapping")
     require(type(intent["retry_failed"]) is bool and intent["reason"].strip(), "Audited retry intent required")
     same(intent["argv"], argv_for(plan, wave, intent["inspection"], intent["indices"]), "exact sealed sbatch intent")
@@ -475,6 +534,7 @@ def load_intent(plan, wave):
 
 
 def acknowledge(plan, wave, job, reason, evidence):
+    submitter_identity(plan["submitter"])
     require(re.fullmatch(r"[1-9]\d*", job or "") is not None and reason.strip(), "Exact array ID and reason required")
     intent = load_intent(plan, wave)
     reconciliation = None
@@ -482,23 +542,28 @@ def acknowledge(plan, wave, job, reason, evidence):
         # Lost acknowledgment: obtain independent scheduler identity rather than
         # trusting an arbitrary job number or treating no queue rows as absence.
         reconciliation = command(["sacct", "-X", "--noheader", "--parsable2", "--jobs", job,
-                                   "--format=JobID%80,JobName%80,Account%80,Partition%80,Comment%200"])
+                                   f"--user={plan['submitter']['uid']}",
+                                   "--format=JobID%80,JobName%80,Account%80,Partition%80,Comment%200,User%80,UID"],
+                                  env=scheduler_environment("SACCT_"))
         expected_comment = f"{VERSION}:{plan['document_sha256']}:{wave.name}"
         found = set()
         for line in reconciliation.splitlines():
             fields = line.split("|")
-            if len(fields) < 5:
-                continue
+            require(len(fields) == 7 and all(fields), "Unparseable reconciliation accounting")
+            scheduler_user(fields[5], fields[6], plan["submitter"])
             match = re.fullmatch(re.escape(job) + r"_(\d+)", fields[0])
+            require(match is not None or fields[0] == job, "Unexpected reconciliation job identity")
+            same(fields[1:5], [f"mobile-eval-{wave.name}", intent["inspection"]["record"]["account"],
+                               intent["inspection"]["record"]["partition"], expected_comment],
+                 "independent Slurm submission identity")
             if match:
+                require(int(match[1]) not in found, "Duplicate reconciliation task evidence")
                 found.add(int(match[1]))
-                same(fields[1:5], [f"mobile-eval-{wave.name}", intent["inspection"]["record"]["account"],
-                                   intent["inspection"]["record"]["partition"], expected_comment],
-                     "independent Slurm submission identity")
         same(sorted(found), intent["indices"], "reconciled exact array mapping (wait for complete accounting)")
     if (wave / "observed-array.json").exists():
         same(read(wave / "observed-array.json")["array_job_id"], job, "observed array ID")
     record = seal({"intent_sha256": intent["document_sha256"], "array_job_id": job, "reason": reason,
+                   "submitter": plan["submitter"],
                    "scheduler_reconciliation": reconciliation,
                    "evidence": None if evidence is None else {"path": str(plain(evidence)), "sha256": digest(evidence)}})
     publish(wave / "ack.json", record)
@@ -507,6 +572,7 @@ def acknowledge(plan, wave, job, reason, evidence):
 
 def allocation(plan, wave, index):
     mapping(index)
+    submitter_identity(plan["submitter"])
     intent = load_intent(plan, wave)
     require(index in intent["indices"], "Task absent from sealed submission")
     r = intent["inspection"]["record"]
@@ -525,13 +591,15 @@ def allocation(plan, wave, index):
     if (wave / "ack.json").exists():
         ack = check(read(wave / "ack.json"))
         same([ack["array_job_id"], ack["intent_sha256"]], [job, intent["document_sha256"]], "acknowledged array")
-    observed = seal({"intent_sha256": intent["document_sha256"], "array_job_id": job})
+        same(ack.get("submitter"), plan["submitter"], "acknowledged OS submitter")
+    observed = seal({"intent_sha256": intent["document_sha256"], "array_job_id": job, "submitter": plan["submitter"]})
     try:
         publish(wave / "observed-array.json", observed)
     except FileExistsError:
         same(check(read(wave / "observed-array.json")), observed, "one array per intent")
     publish(wave / "claims" / f"{index}.json", seal({"global_index": index, "array_job_id": job,
             "job_id": os.environ["SLURM_JOB_ID"], "intent_sha256": intent["document_sha256"],
+            "submitter": plan["submitter"],
             "pid": os.getpid(), "host": socket.gethostname()}))
     return intent
 
@@ -580,22 +648,30 @@ def run(args):
 
 
 TERMINAL = {"COMPLETED", "FAILED", "CANCELLED", "TIMEOUT", "NODE_FAIL", "OUT_OF_MEMORY", "PREEMPTED", "BOOT_FAIL", "DEADLINE", "REVOKED"}
+ACTIVE_STATES = {"PENDING", "RUNNING", "COMPLETING", "CONFIGURING", "SUSPENDED", "STOPPED",
+                 "RESIZING", "RESV_DEL_HOLD", "REQUEUE_FED", "REQUEUE_HOLD", "REQUEUED",
+                 "SIGNALING", "SPECIAL_EXIT", "STAGE_OUT"}
 
 
-def accounting(job, selected):
+def accounting(job, selected, *, submitter):
+    submitter_identity(submitter)
     output = command(["sacct", "-X", "--noheader", "--parsable2", "--jobs", job,
-                      "--format=JobID%80,State%80,ExitCode"])
+                      f"--user={submitter['uid']}", "--format=JobID%80,State%80,ExitCode,User%80,UID"],
+                     env=scheduler_environment("SACCT_"))
     rows = {}
     for line in output.splitlines():
         parts = line.split("|")
-        if len(parts) < 3:
-            continue
+        require(len(parts) == 5 and all(parts), "Unparseable settlement accounting")
+        scheduler_user(parts[3], parts[4], submitter)
         match = re.fullmatch(re.escape(job) + r"_(\d+)", parts[0])
+        require(match is not None or parts[0] == job, "Unexpected settlement job identity")
+        state = parts[1].split()[0].rstrip("+")
+        require(re.fullmatch(r"\d+:\d+", parts[2]) is not None, "Unparseable accounting exit code")
+        require(state in TERMINAL, "Accounting is not terminal; keep reservations")
         if match:
             index = int(match[1])
             require(index not in rows, "Duplicate accounting task evidence")
-            state = parts[1].split()[0].rstrip("+")
-            rows[index] = {"state": state, "exit_code": parts[2]}
+            rows[index] = {"state": state, "exit_code": parts[2], "user": parts[3], "uid": int(parts[4])}
     same(sorted(rows), selected, "complete exact per-index accounting")
     require(all(row["state"] in TERMINAL for row in rows.values()), "Accounting is not terminal; keep reservations")
     return output, rows
@@ -605,28 +681,36 @@ def validate_settlement(wave, plan):
     intent = load_intent(plan, wave)
     ack = check(read(wave / "ack.json"))
     record = check(read(wave / "settled.json"))
+    same([ack.get("submitter"), record.get("submitter")], [plan["submitter"], plan["submitter"]],
+         "settled OS submitter identity")
     same([ack["intent_sha256"], record["intent_sha256"], record["array_job_id"]],
          [intent["document_sha256"], intent["document_sha256"], ack["array_job_id"]], "settled intent/array")
     same(record["inactive_across_nodes_confirmed"], True, "settlement inactivity evidence")
     same(sorted(map(int, record["rows"])), intent["indices"], "settled accounting mapping")
     require(all(r["state"] in TERMINAL for r in record["rows"].values()), "Unsettled accounting evidence")
+    for row in record["rows"].values():
+        scheduler_user(row["user"], str(row["uid"]), plan["submitter"])
     return record
 
 
 def settle(args):
     plan, _ = load_plan(args.plan)
+    submitter_identity(plan["submitter"])
     wave = wave_path(args.wave)
     with controller_lock(OPS):
         intent = load_intent(plan, wave)
         ack = check(read(wave / "ack.json"))
         same(ack["intent_sha256"], intent["document_sha256"], "settlement acknowledgment")
+        same(ack.get("submitter"), plan["submitter"], "settlement OS submitter")
         require(args.reason.strip() and args.confirmed_inactive_across_nodes,
                 "Explicit all-owner/all-allocation inactivity confirmation and reason required")
-        require(not any(row["array"] == ack["array_job_id"] for row in queue(intent["inspection"]["record"]["account"])),
+        current = queue(plan["submitter"])
+        require(not any(row["array"] == ack["array_job_id"] or row["job"] == ack["array_job_id"] for row in current),
                 "Array remains queued or active")
-        output, rows = accounting(ack["array_job_id"], intent["indices"])
+        output, rows = accounting(ack["array_job_id"], intent["indices"], submitter=plan["submitter"])
         # Settlement releases scheduling reservations only, never scientific completion.
         record = seal({"intent_sha256": intent["document_sha256"], "array_job_id": ack["array_job_id"],
+                       "submitter": plan["submitter"], "queue": current,
                        "reason": args.reason, "inactive_across_nodes_confirmed": True, "accounting": output,
                        "rows": {str(i): row for i, row in rows.items()}, "scientific_completion_authority": False,
                        "recorded_at_utc": datetime.now(timezone.utc).isoformat()})
