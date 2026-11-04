@@ -1201,3 +1201,102 @@ class FreshnessChecks(OperatorCase):
             submission.assert_not_called()
         self.assertTrue(delayed)
         self.assertTrue((op.OPS / "waves/first/intent.json").exists())
+
+
+class PartitionFilterChecks(OperatorCase):
+    # Exact user-supplied fields, joined as the collector's --oneliner output.
+    OSU_PARTITION = ("PartitionName=dgxh AllowGroups=ALL AllowAccounts=ALL "
+                     "DenyQos=dgx2-plus QoS=dgxh MaxTime=2-00:00:00 State=UP")
+
+    def eligibility(self, partition=None, *, qos="normal", accounts=None):
+        request = {"account": "eecs", "qos": qos, "partition": "dgxh", "node": "fixture-node",
+                   "wall_time": "00:30:00", "gres": "gpu:1"}
+        before = deepcopy(request)
+        op.resource_eligibility(request, accounts or "eecs|fixture-user||normal,dgx2-plus|normal",
+                                qos + "|01:00:00", self.OSU_PARTITION if partition is None else partition,
+                                self.resource_outputs["node"])
+        self.assertEqual(request, before)
+
+    def test_actual_osu_deny_only_partition_accepts_normal_and_rejects_denied_qos(self):
+        self.eligibility()
+        with self.assertRaisesRegex(ValueError, "Partition no longer permits chosen dgx2-plus"):
+            self.eligibility(qos="dgx2-plus")
+
+    def test_explicit_qos_allow_lists_and_all(self):
+        for policy, permitted in (("AllowQos=normal", True), ("AllowQos=other,normal", True),
+                                  ("AllowQos=ALL", True), ("AllowQos=other", False)):
+            with self.subTest(policy=policy):
+                partition = self.OSU_PARTITION.replace("DenyQos=dgx2-plus", policy)
+                if permitted:
+                    self.eligibility(partition)
+                else:
+                    with self.assertRaisesRegex(ValueError, "Partition no longer permits"):
+                        self.eligibility(partition)
+
+    def test_explicit_allow_takes_precedence_over_valid_deny_filter(self):
+        for policy, permitted in (("AllowQos=normal DenyQos=normal", True),
+                                  ("AllowQos=ALL DenyQos=normal", True),
+                                  ("AllowQos=other DenyQos=dgx2-plus", False)):
+            with self.subTest(policy=policy):
+                partition = self.OSU_PARTITION.replace("DenyQos=dgx2-plus", policy)
+                if permitted:
+                    self.eligibility(partition)
+                else:
+                    with self.assertRaisesRegex(ValueError, "Partition no longer permits"):
+                        self.eligibility(partition)
+
+    def test_malformed_and_ambiguous_filter_evidence_still_rejects(self):
+        policies = ("", "AllowQos=", "DenyQos=", "AllowQos=normal,,other", "DenyQos=normal,",
+                    "AllowQos=(null)", "AllowQos=normal?other", "AllowQos=ALL,normal", "DenyQos=ALL",
+                    "AllowQos=normal AllowQos=other", "AllowQos=normal AllowQOS=other",
+                    "DenyQos=dgx2-plus DenyQoS=normal", "AllowQos=normal DenyQos=")
+        for policy in policies:
+            with self.subTest(policy=policy):
+                with self.assertRaises(ValueError):
+                    self.eligibility(self.OSU_PARTITION.replace("DenyQos=dgx2-plus", policy))
+
+    def test_account_filters_use_equivalent_allow_deny_selection_and_precedence(self):
+        for policy, permitted in (("DenyAccounts=other", True), ("DenyAccounts=eecs", False),
+                                  ("AllowAccounts=eecs,other", True), ("AllowAccounts=ALL", True),
+                                  ("AllowAccounts=other", False),
+                                  ("AllowAccounts=eecs DenyAccounts=eecs", True),
+                                  ("AllowAccounts=ALL DenyAccounts=eecs", True),
+                                  ("AllowAccounts=other DenyAccounts=other", False)):
+            with self.subTest(policy=policy):
+                partition = self.OSU_PARTITION.replace("AllowAccounts=ALL", policy)
+                if permitted:
+                    self.eligibility(partition)
+                else:
+                    with self.assertRaisesRegex(ValueError, "Partition no longer permits chosen eecs"):
+                        self.eligibility(partition)
+
+    def test_account_filter_malformed_or_missing_evidence_is_rejected(self):
+        for policy in ("", "AllowAccounts=", "DenyAccounts=(null)", "AllowAccounts=ALL,eecs",
+                       "DenyAccounts=eecs,,other", "AllowAccounts=eecs AllowACCOUNTS=other"):
+            with self.subTest(policy=policy):
+                with self.assertRaises(ValueError):
+                    self.eligibility(self.OSU_PARTITION.replace("AllowAccounts=ALL", policy))
+
+    def test_partition_qos_does_not_supply_missing_access_or_association_authority(self):
+        with self.assertRaisesRegex(ValueError, "Missing partition access-filter evidence"):
+            self.eligibility(self.OSU_PARTITION.replace("DenyQos=dgx2-plus ", "").replace("QoS=dgxh", "QoS=normal"))
+        with self.assertRaisesRegex(ValueError, "account/QOS/partition is not currently eligible"):
+            self.eligibility(accounts="eecs|fixture-user||other|other")
+
+    def test_fresh_collection_and_submission_argv_keep_job_qos_normal(self):
+        self.prepare_request()
+        request = op.read(self.inspection_path)
+        request["qos"] = "normal"
+        self.inspection_path.write_text(op.canonical(request), encoding="utf-8")
+        self.resource_outputs.update(assoc="fixture|fixture-user||normal,dgx2-plus|normal",
+                                     qos="normal|01:00:00", partition=self.OSU_PARTITION)
+        with patch.object(op, "queue", return_value=[]):
+            plan = op.prepare(NS(export_bindings=str(self.export_path), inspection=str(self.inspection_path)))
+        op.current_resources(plan["inspection"])
+        self.assertEqual(plan["inspection"]["record"]["qos"], "normal")
+        argv = op.argv_for(plan, op.wave_path("policy-check"), plan["inspection"], [0])
+        self.assertIn("--qos=normal", argv)
+        self.assertNotIn("--qos=dgxh", argv)
+        receipts = op.read(plan["inspection"]["evidence"]["accounts"]["path"])
+        self.assertIn("name=normal", receipts["qos"]["argv"])
+        self.assertIn("QoS=dgxh", receipts["partition"]["stdout"])

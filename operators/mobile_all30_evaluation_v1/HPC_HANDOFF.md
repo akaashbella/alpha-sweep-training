@@ -1,16 +1,18 @@
-# MobileNet all-30 evaluation: v2 freshness handoff
+# MobileNet all-30 evaluation: v2 partition-filter handoff
 
-This revision starts at `89481486e127e3ee7598858115690dc83ee32b4c` on
+This revision starts at `9edde981019201c114f0f5c6ed4f409042dd443b` on
 `ops/mobile-all30-evaluation-v1`. The repository directory still has its historical
 `mobile_all30_evaluation_v1` name; the revised operational version is
-`mobile-all30-evaluation-operator-v2`. Deploy it to **new v2 paths** only.
+`mobile-all30-evaluation-operator-v2`. Deploy it to **new paths** only; do not
+replace an already-owned v2 bundle.
 
 Only local mocked CPU tests, syntax checks and scoped Git publication are
 authorized in this task. No command below was run against HPC here. Actual
 checkpoint loading, scheduler queries, submission, evaluation, reporting and
 installation were not performed. Future operational commands require separate
-authorization. The original 44-check HPC pass is user-reported historical evidence;
-it does not validate the new collector against the site's real output.
+authorization. The user reports all previous 58 checks passing on HPC, followed
+by the real collector rejecting the deny-only partition output below. That pass
+does not establish support for every real scheduler representation.
 
 ## Preserve the observed state
 
@@ -26,7 +28,9 @@ Keep these exact existing paths and bytes:
 | Purpose | Path under `/nfs/hpc/share/bellaak/research/alpha-sweep` |
 |---|---|
 | Already-owned v1 external bundle | `mobile-all30-eval-launch-v1` |
+| Existing v2 deployment and CPU staging, if present | `mobile-all30-eval-launch-v2`, `mobile-all30-eval-cpu-review-v2` |
 | Failed inspection, including empty `preparation-result.json` | `mobile-all30-eval-inspection.ZUxVLZ` |
+| Every existing resource receipt, including failed collections | `mobile-all30-eval-resources-v2-*` |
 | Historical v1 operational root, if any appears | `mobile-eps0316-evaluation-ops-v1` |
 | Frozen native checkout | `alpha-sweep-mobile-eps0316` |
 | Manifest/pilot/training artifacts | `mobile-eps0316-v1` |
@@ -36,9 +40,9 @@ New destinations:
 
 | Purpose | Path under the same base |
 |---|---|
-| CPU review source staging | `mobile-all30-eval-cpu-review-v2` |
-| New owned runtime bundle | `mobile-all30-eval-launch-v2` |
-| New operational plan/registry | `mobile-eps0316-evaluation-ops-v2/plan.json` |
+| CPU review source staging | `mobile-all30-eval-cpu-review-v2-qos-filter` |
+| New owned runtime bundle | `mobile-all30-eval-launch-v2-qos-filter` |
+| Operational plan/registry, only if absent | `mobile-eps0316-evaluation-ops-v2/plan.json` |
 | Each new resource snapshot | `mobile-all30-eval-resources-v2-<unique-token>` |
 
 The native evaluation root remains `mobile-eps0316-evaluations-v1`; it is an
@@ -52,19 +56,18 @@ No scientific setting, checkpoint binding, training identity or protocol changed
 The runtime directory contains exactly six source files, plus its newly created
 `BUNDLE_OWNER.json` after `own-bundle`:
 
-- `launcher.py`: v2 phases, native verification, fresh resource collector,
-  ownership, OS identity, submission/continuation and scheduler reconciliation.
+- `launcher.py`: documented partition allow/deny selection, v2 phases, native
+  verification, fresh resource collection, ownership, OS identity and submission.
 - `batch.sh`: unchanged owning-Python `exec` and native allocation signal handoff.
 - `report.py`: unchanged evidence-preserving 30/840 reporting and verification flags.
-- `figures.py`: same verified-only measurements; additionally protects v1 and
-  failed-inspection paths from derived-output placement.
+- `figures.py`: unchanged verified-only measurements and protected output paths.
 - `HPC_HANDOFF.md`: this operating sequence.
 - `REVIEW.md`: evidence, actual checks and remaining limitations.
 
 CPU support remains outside the runtime inventory:
 `operators/mobile_all30_evaluation_checks/run_cpu_checks.py` (unchanged) and
-`test_operator.py` (extended). This revision changes five files: `launcher.py`,
-`figures.py`, both runtime Markdown files and `test_operator.py`. No new files.
+`test_operator.py` (extended). This revision changes four files: `launcher.py`,
+both runtime Markdown files and `test_operator.py`. No new files.
 Do not copy the older full repository snapshot over the pinned native checkout.
 
 ## Freshness and authority
@@ -127,6 +130,29 @@ local cluster; collaborator-owned work, other clusters and uncertain submissions
 need explicit independent reservations. Existing v1 operations evidence blocks
 new work until cross-version ownership/capacity is separately reconciled.
 
+### Partition access filters and the job QOS
+
+For both account and QOS filters, an explicit `Allow*` list takes precedence over
+the corresponding `Deny*` list; `ALL` permits any choice. With only `Deny*`
+present, choices outside that list pass. These are Slurm's documented
+[partition filter semantics](https://slurm.schedmd.com/slurm.conf.html).
+The supplied OSU record has `AllowAccounts=ALL DenyQos=dgx2-plus QoS=dgxh`:
+the QOS filter permits requested `normal` and rejects `dgx2-plus`. No site-specific
+exception or resource-request change is applied.
+
+Partition `QoS=dgxh` supplies a partition limit policy; it does not replace the
+job's requested `--qos=normal`. See Slurm's
+[partition QOS explanation](https://slurm.schedmd.com/qos.html). Association
+membership for `normal` is still required. Empty, malformed, conflicting field
+aliases and mixed wildcard lists reject. If both access-filter fields are absent,
+the collector rejects incomplete evidence rather than inferring access from
+plain `QoS`. Even a superseded deny field must be structurally valid.
+
+Account membership checks use exact names; they do not resolve Slurm account
+ancestry. Attached partition-QOS limits and effective TRES/group/OverPartQOS
+policy are not fully resolved by this collector. These remain site-policy review
+limits, not permission to adjust requests or weaken reservations.
+
 Progress is flushed to stderr: named phase start, checkpoint index/run ID,
 completion/failure and monotonic elapsed seconds. Stdout remains strict result
 JSON. A checkpoint may still take time, but its current phase is visible.
@@ -144,8 +170,8 @@ needed. Native package imports, checkpoints, Torch/CUDA, scheduler commands and
 renderer calls are mocked. All fixture outputs are temporary. OS identity and
 POSIX directory-fsync are mocked on Windows; exclusive temporary file publication
 is real. The runner checks all five Python files' syntax and Python 3.11 grammar.
-Actual local result: **58 tests passed in 72.502 seconds** on Windows / Python
-3.13.12, including all previous 44 checks and 14 freshness/order regressions.
+Actual local result: **66 tests passed in 70.859 seconds** on Windows / Python
+3.13.12, covering all previous 58 checks plus eight partition-filter regressions.
 Syntax and Python 3.11 grammar checks passed for all five Python files; whitespace
 checks passed. See `REVIEW.md` for the distinction from real HPC verification.
 
@@ -157,7 +183,7 @@ PowerShell, set the established OSU SSH target; do not guess or change login hos
 ```powershell
 $HpcHost = Read-Host 'Established OSU SSH target (user@host)'
 $TaskRoot = 'C:\Users\akaas\RESEARCH\alpha-sweep-training\.handoff-worktrees\mobile-all30-evaluation'
-$Review = '/nfs/hpc/share/bellaak/research/alpha-sweep/mobile-all30-eval-cpu-review-v2'
+$Review = '/nfs/hpc/share/bellaak/research/alpha-sweep/mobile-all30-eval-cpu-review-v2-qos-filter'
 ssh $HpcHost "test ! -e $Review"
 if ($LASTEXITCODE -ne 0) { throw 'Review destination exists or SSH check failed' }
 ssh $HpcHost "mkdir $Review"
@@ -175,8 +201,8 @@ set -euo pipefail
 BASE=/nfs/hpc/share/bellaak/research/alpha-sweep
 NATIVE="$BASE/alpha-sweep-mobile-eps0316"
 PY="$BASE/alpha-sweep-training/.venv/bin/python"
-REVIEW="$BASE/mobile-all30-eval-cpu-review-v2"
-OP="$BASE/mobile-all30-eval-launch-v2"
+REVIEW="$BASE/mobile-all30-eval-cpu-review-v2-qos-filter"
+OP="$BASE/mobile-all30-eval-launch-v2-qos-filter"
 OPS="$BASE/mobile-eps0316-evaluation-ops-v2"
 FAILED="$BASE/mobile-all30-eval-inspection.ZUxVLZ"
 REQUEST="$FAILED/inspection.json"
@@ -196,6 +222,11 @@ unset OMP_NUM_THREADS MKL_NUM_THREADS OPENBLAS_NUM_THREADS NUMEXPR_NUM_THREADS V
 "$PY" -B "$OP/launcher.py" own-bundle
 cat "$REQUEST"
 ```
+
+If any guarded destination already exists, stop and preserve it. An existing v2
+plan pins the previous external bytes and must not be edited to accept this
+bundle. Reconciliation or a separately reviewed new operational root is required
+before proceeding; these commands never migrate or overwrite a plan.
 
 Review all resource choices, wall-time justification and the current project
 reservation agreement before continuing. If the original request is elsewhere,

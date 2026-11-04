@@ -440,6 +440,36 @@ def control_fields(output):
     return dict(pairs)
 
 
+def partition_permits(fields, allow_key, deny_key, choice):
+    """Decode explicit filter evidence: an allow list supersedes the deny list.
+
+    scontrol may render only the active deny filter, with no Allow* field.
+    Plain partition QoS is unrelated to these access filters. Account-name
+    matching here is direct; account ancestry is not inferred from spelling.
+    """
+    def field(name):
+        matches = [value for key, value in fields.items() if key.casefold() == name.casefold()]
+        require(len(matches) <= 1, "Ambiguous partition filter field: " + name)
+        if not matches:
+            return False, set()
+        value = matches[0]
+        require(type(value) is str and bool(value), "Empty or invalid partition filter: " + name)
+        names = value.split(",")
+        require(all(re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*", item) for item in names),
+                "Malformed partition filter list: " + name)
+        if any(item.casefold() == "all" for item in names):
+            require(name == allow_key and len(names) == 1, "Unsupported ALL partition filter: " + name)
+            return True, None
+        return True, set(names)
+
+    allow_present, allowed = field(allow_key)
+    deny_present, denied = field(deny_key)
+    require(allow_present or deny_present, "Missing partition access-filter evidence: " + allow_key + "/" + deny_key)
+    if allow_present:
+        return allowed is None or choice in allowed
+    return choice not in denied
+
+
 def resource_eligibility(request, accounts, qos, partition, node):
     """Validate chosen eligibility; never select replacements or change requests."""
     associations = [line.split("|") for line in accounts.splitlines()]
@@ -459,8 +489,7 @@ def resource_eligibility(request, accounts, qos, partition, node):
             "Chosen node is not currently eligible")
     for key, denied, choice in (("AllowAccounts", "DenyAccounts", request["account"]),
                                  ("AllowQos", "DenyQos", request["qos"])):
-        require(key in part and (part[key] == "ALL" or choice in part[key].split(","))
-                and choice not in part.get(denied, "").split(","), "Partition no longer permits chosen " + choice)
+        require(partition_permits(part, key, denied, choice), "Partition no longer permits chosen " + choice)
     for limit in (qos_rows[0][1], part.get("MaxTime", "")):
         maximum = seconds(limit)
         require(maximum is None or seconds(request["wall_time"]) <= maximum, "Chosen wall time exceeds current limit")

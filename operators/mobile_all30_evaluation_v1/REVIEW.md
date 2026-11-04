@@ -1,8 +1,8 @@
-# v2 ordering, evidence and verification review
+# v2 partition filters, evidence and verification review
 
 Worktree: `C:\Users\akaas\RESEARCH\alpha-sweep-training\.handoff-worktrees\mobile-all30-evaluation`.
 Branch: `ops/mobile-all30-evaluation-v1`. Starting commit:
-`89481486e127e3ee7598858115690dc83ee32b4c`. This task authorizes scoped code,
+`9edde981019201c114f0f5c6ed4f409042dd443b`. This task authorizes scoped code,
 mocked CPU tests/syntax checks and commit/push after checks. It does not authorize
 HPC operations, real checkpoint loading, research evaluation, training, installs
 or submission. None of those operations was performed here.
@@ -12,10 +12,17 @@ or submission. None of those operations was performed here.
 The user reported a 23.7-minute-old inspection at
 `/nfs/hpc/share/bellaak/research/alpha-sweep/mobile-all30-eval-inspection.ZUxVLZ`,
 an empty preparation result, no operational plan, and no validation/preview.
-They also reported the previous 44 checks passing on HPC, actual identity
+They also reported the original 44 checks passing on HPC, actual identity
 `bellaak`/17907, an empty owner queue and previously matching 30 best bindings.
 These are supplied observations, not a new HPC inspection or current integrity
 proof. v1 deployment ownership and failed evidence are never repaired or changed.
+
+For this revision, the user reports all 58 prior checks passing on HPC, followed
+by real resource collection failing because `AllowQos` was required. Their supplied
+partition record has `AllowAccounts=ALL DenyQos=dgx2-plus QoS=dgxh`, no
+`AllowQos`, and a user association supporting requested `normal`. That exact
+representation is now a CPU fixture; no live OSU query was run here. Every
+existing v1/v2 deployment, resource receipt and HPC plan is preserved.
 
 The original ZIP remains untracked under `handoff-evidence/mobile-all30-review/`.
 Its 27 declared hashes were checked in initial preparation; its analysis and
@@ -31,22 +38,39 @@ the pinned GitHub commit; this revision changes only the external operator.
 
 ## Exact changes
 
-Five modified files, no new files:
+Four modified files, no new files:
 
 - `operators/mobile_all30_evaluation_v1/launcher.py`
-- `operators/mobile_all30_evaluation_v1/figures.py`
 - `operators/mobile_all30_evaluation_v1/HPC_HANDOFF.md`
 - `operators/mobile_all30_evaluation_v1/REVIEW.md`
 - `operators/mobile_all30_evaluation_checks/test_operator.py`
 
-`batch.sh`, `report.py`, `run_cpu_checks.py` and native source retain their bytes.
+`batch.sh`, `report.py`, `figures.py`, `run_cpu_checks.py` and native source retain
+their bytes.
 The runtime inventory is still six files; both CPU support files remain outside
 it. The historical repository folder name does not name the deployment version.
-The v2 bundle and plan paths are new; the already-owned v1 bundle is protected.
+The handoff names a fresh `v2-qos-filter` deployment/staging pair; existing bundles
+and receipts are protected. The v2 plan path must still be absent before prepare.
 If any old operational registry exists, new work blocks for explicit cross-version
 capacity reconciliation. No old ownership claim is adopted or widened.
 
 ## Final behavior
+
+Partition filters now follow Slurm's documented
+[allow/deny precedence](https://slurm.schedmd.com/slurm.conf.html): an explicit
+allow list (including `ALL`) controls membership even when a deny list is also
+present. Without an allow list, a deny list excludes only its named choices.
+The same helper selects account filters. The supplied deny-only OSU record thus
+permits `normal` and rejects `dgx2-plus`; no OSU-specific exception is used.
+Malformed supplied lists, duplicate aliases, mixed wildcards and absent filter
+evidence still reject. Structurally invalid deny evidence rejects even when an
+allow list would otherwise control membership.
+
+Attached partition `QoS=dgxh` remains separate from requested job QOS `normal`,
+as described in Slurm's [QOS documentation](https://slurm.schedmd.com/qos.html).
+It does not grant association membership or change `--qos`. The new integration
+check exercises real prepare/collection/argv functions and verifies this boundary.
+No freshness, identity, reservation, binding or intent ordering logic changed.
 
 `prepare` reads an old reviewed inspection-shaped request as declarations, runs
 full actual source/software/launch/manifest/checkpoint checks, then collects new
@@ -105,17 +129,16 @@ query, checkpoint load or model construction can escape the mocks. On Windows,
 POSIX directory-fsync is mocked; exclusive file publication is real. Rendering
 is mocked and no research reports/figures are produced.
 
-The final run passed **58 tests in 72.502 seconds** on Windows / Python 3.13.12:
-all previous **44 checks** plus **14 freshness/order regressions**. Syntax and
+The final run passed **66 tests in 70.859 seconds** on Windows / Python 3.13.12:
+all previous **58 checks** plus **eight partition-filter regressions**. Syntax and
 Python 3.11 grammar checks passed for all **five Python files**; whitespace checks
-passed. This is local mocked verification, not a new HPC result. During
-development, two existing preview tests initially lacked a mock for the new
-fresh queue query; their external-command guard rejected it. The fixtures were
-updated to supply that mock, without permitting real subprocesses. Subsequent
-candidate runs passed; no unrun HPC check is claimed here.
+passed. This is local mocked verification, not a new HPC result. No unrun HPC
+check is claimed here.
 
 | Area | Behavioral evidence |
 |---|---|
+| Partition filters | Exact supplied deny-only record; allowed `normal`/denied `dgx2-plus`; explicit allow lists/ALL; allow-over-deny precedence; equivalent account cases; malformed/ambiguous evidence rejection |
+| QOS roles | Fresh prepare/receipt/argv path keeps requested `normal` and association checks despite attached partition `QoS=dgxh`; request bytes remain unchanged |
 | Long prepare | Clock advances 30 minutes during actual wrapper/native-adapter verification; collection happens afterward with new receipts; old request unchanged |
 | Long submit | Full checks run under controller ownership before new resource/queue capture; one actual intent precedes mocked sbatch |
 | Freshness | Old generated snapshots, copied/retimestamped receipts, collection exceeding 15 minutes, post-intent delay and final validation I/O delay all reject |
@@ -127,8 +150,8 @@ candidate runs passed; no unrun HPC check is claimed here.
 ## Remaining HPC verification and limits
 
 `HPC_HANDOFF.md` gives exact external-only staging, CPU checks, v2 ownership,
-prepare/validate/preview, monitoring and continuation commands. The new collector
-has not been run against OSU. Actual `sacctmgr` resolved-QOS output and `scontrol`
+prepare/validate/preview, monitoring and continuation commands. The revised parser
+has not been run against OSU here. Actual `sacctmgr` resolved-QOS output and `scontrol`
 fields, OS/NSS identity consistency, permissions, quotas, node availability,
 Slurm/accounting behavior and POSIX durability remain unverified by these mocks.
 Unsupported or ambiguous site output fails closed for review; no parser override
@@ -136,7 +159,10 @@ or package installation is supplied. All prior scientific environment/hardware
 requirements still apply to later authorized evaluation.
 
 Automatic eligibility is not a proof of every account/QOS/TRES/group entitlement,
-available GPUs or storage quota. Outside-user/cluster/uncertain project work needs
+available GPUs or storage quota. Account ancestry is not resolved by exact-name
+checks. Effective attached partition-QOS/TRES/group/OverPartQOS limits still need
+site-policy review; a partition QOS is not substituted for the job QOS.
+Outside-user/cluster/uncertain project work needs
 independent explicit reservations and an agreement against unreserved launches.
 The collector does not infer collaborator inactivity from an empty owner queue.
 An old v1 registry or a new partial/uncertain intent is not automatically cleared.
@@ -144,6 +170,6 @@ An old v1 registry or a new partial/uncertain intent is not automatically cleare
 There is still no cancellation, lock stealing, uncertain-intent deletion, partial
 plan repair, automatic resubmission or numerical-failure retry. Staging/failed
 snapshot evidence remains for audited review. A future rerun after failure must
-not overwrite the already-owned v1 bundle, the old failed inspection or a new
-partially published v2 plan/intent. The native checkout is never replaced by this
-branch's older repository snapshot.
+not overwrite any existing deployment or resource receipt, the old failed
+inspection or a new partially published v2 plan/intent. The native checkout is
+never replaced by this branch's older repository snapshot.
