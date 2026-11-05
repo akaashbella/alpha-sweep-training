@@ -89,7 +89,8 @@ def build_optimizer(model: nn.Module, config: RunConfig) -> Optimizer:
     named = named_parameters_once(model)
     if not named or any(not parameter.requires_grad for _, parameter in named):
         raise OptimizerConstructionError("Approved scratch models must retain every parameter as trainable; do not freeze biases, normalization, or other clean parameters")
-    recipe = optimizer_recipe(science["architecture"])
+    recipe = optimizer_recipe(science["architecture"], dataset=science["dataset"],
+                              specification_version=science["specification_version"])
     parameters = tuple(parameter for _, parameter in named)
     common = {"lr": recipe["learning_rate"], "weight_decay": recipe["weight_decay"]}
     if recipe["name"] == "sgd":

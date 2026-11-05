@@ -6,7 +6,7 @@ import json
 import math
 
 from .config import ConfigError, RunConfig
-from .spec import FINGERPRINT_VERSION, SCHEMA_VERSION
+from .spec import FINGERPRINT_VERSION, SCHEMA_VERSION, CIFAR100_MOBILE_EPS0316_VERSION
 
 
 def canonical_alpha(alpha: int | float) -> str:
@@ -29,13 +29,16 @@ def canonical_alpha(alpha: int | float) -> str:
 
 
 def run_identity(config: RunConfig) -> str:
-    """A research run is one dataset/architecture/alpha/training-seed tuple."""
+    """Stable historical tuple name, with an explicit suffix for revised recipes."""
     config.require_research_ready()
     science = config.scientific
-    return (
+    identity = (
         f"{science['dataset']}__{science['architecture']}"
         f"__alpha-{canonical_alpha(science['alpha'])}__seed-{science['training_seed']}"
     )
+    if science["specification_version"] == CIFAR100_MOBILE_EPS0316_VERSION:
+        identity += "__recipe-mobile-eps0316-v1"
+    return identity
 
 
 def scientific_fingerprint(config: RunConfig) -> str:

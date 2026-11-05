@@ -12,7 +12,8 @@ from .config import ConfigError, RunConfig, from_declaration
 from .data_contract import content_identity, require_seed
 from .identity import canonical_alpha, run_identity, scientific_fingerprint
 from .serialization import atomic_write_json, durable_mkdir, fsync_directory, read_json, strict_json_text
-from .spec import ALPHAS, ARCHITECTURES, DATASETS, SEED_COUNT, TOTAL_RUNS
+from .spec import (ALPHAS, ARCHITECTURES, DATASETS, SEED_COUNT, TOTAL_RUNS,
+                   CIFAR100_MOBILE_EPS0316_VERSION, CIFAR100_MOBILE_EPS0316)
 
 MANIFEST_VERSION = 1
 GRID_VERSION = "ordered-scientific-tasks-v1"
@@ -219,9 +220,11 @@ def validate_phase_document(document, parent: Manifest) -> tuple[Task, ...]:
 
 
 def build_manifest(dataset_configs: Mapping[str, RunConfig], model_declarations: Mapping[str, Mapping],
-                   *, seeds: list[int], base_dir) -> Manifest:
+                   *, seeds: list[int], base_dir, cifar100_mobile_eps0316: bool = False) -> Manifest:
     """Prepared base -> architecture declaration -> alpha/seed, never raw dataset overlay."""
     from .prepared import load_prepared_dataset
+    if type(cifar100_mobile_eps0316) is not bool:
+        raise ManifestError("cifar100_mobile_eps0316 must be bool")
     seeds = seed_plan(seeds)
     if set(dataset_configs) != set(DATASETS) or set(model_declarations) != set(ARCHITECTURES):
         raise ManifestError("Supply both prepared dataset bases and exactly the four architecture declarations")
@@ -234,6 +237,10 @@ def build_manifest(dataset_configs: Mapping[str, RunConfig], model_declarations:
             "scientific.alpha": alpha, "scientific.training_seed": seed, "scientific.training_seeds": seeds})
         if config.scientific["dataset"] != dataset or config.scientific["architecture"] != architecture:
             raise ManifestError("Model declaration changed dataset or selected the wrong architecture")
+        if cifar100_mobile_eps0316 and (dataset, architecture) == ("cifar100", "mobilenetv3_large"):
+            config = from_declaration(config.to_dict(), overrides={
+                "scientific.specification_version": CIFAR100_MOBILE_EPS0316_VERSION,
+                "scientific.optimizer.epsilon": CIFAR100_MOBILE_EPS0316})
         missing.update(f"{dataset}/{architecture}: {key}" for key in config.unresolved_settings())
         if config.execution["storage"]["split_file"] is None:
             missing.add(f"{dataset}: execution.storage.split_file (finalized preparation required)")

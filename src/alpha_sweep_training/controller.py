@@ -55,7 +55,8 @@ def _selection(manifest, args):
 def _build(args):
     bases = {name: load_config(getattr(args, f"{name}_config")) for name in DATASETS}
     models = {name: _read_yaml(Path(args.models_dir) / f"{name}.yaml") for name in ARCHITECTURES}
-    manifest = build_manifest(bases, models, seeds=args.seeds, base_dir=args.base_dir)
+    manifest = build_manifest(bases, models, seeds=args.seeds, base_dir=args.base_dir,
+                              cifar100_mobile_eps0316=args.cifar100_mobile_eps0316)
     output = Path(args.output).expanduser().absolute()
     phase_paths = [Path(args.phase1_output).expanduser().absolute() if args.phase1_output else
                    output.with_name(output.stem + ".phase1.json"),
@@ -108,6 +109,8 @@ def main(argv=None) -> int:
     build.add_argument("--phase1-output")
     build.add_argument("--phase2-output")
     build.add_argument("--replace-manifests", action="store_true")
+    build.add_argument("--cifar100-mobile-eps0316", action="store_true",
+                       help="Version only CIFAR-100 MobileNetV3-Large tasks with RMSprop epsilon 0.0316")
     inspect = commands.add_parser("inspect", help="Validate full document and optionally its phase view")
     inspect.add_argument("--manifest", required=True)
     inspect.add_argument("--phase-view")

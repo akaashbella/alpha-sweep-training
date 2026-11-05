@@ -127,6 +127,15 @@ differential learning rates. No configuration field is modified.
 | MobileNetV3-Large / EfficientNet-B0 | RMSprop lr=0.01, momentum=0.9, weight_decay=0.00001, alpha=0.9, eps=0.001 | centered=False, capturable=False, foreach=None, maximize=False, differentiable=False |
 | ConvNeXt-Tiny | AdamW lr=0.001, weight_decay=0.05, betas=(0.9,0.999) | eps=1e-8, amsgrad=False, maximize=False, foreach=None, capturable=False, differentiable=False, fused=None |
 
+The table retains historical `main-v1`. Explicit specification
+`main-v1-cifar100-mobile-eps0316` uses epsilon 0.0316 only for CIFAR-100
+MobileNetV3-Large. The native builder selects the central recipe using dataset,
+architecture and specification version, then passes its epsilon to `RMSprop(eps=...)`.
+Its other options, parameter ownership and one-group decay policy are unchanged.
+Native construction/forward checks for this revision are supplied in
+`tests/test_cifar100_recipe.py`; their local dependency blockers and exact HPC
+commands are in [cifar100-readiness.md](cifar100-readiness.md).
+
 The defaults are read from pinned PyTorch [SGD](https://github.com/pytorch/pytorch/blob/v2.5.1/torch/optim/sgd.py),
 [RMSprop](https://github.com/pytorch/pytorch/blob/v2.5.1/torch/optim/rmsprop.py),
 and [AdamW](https://github.com/pytorch/pytorch/blob/v2.5.1/torch/optim/adamw.py)

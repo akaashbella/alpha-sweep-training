@@ -16,6 +16,7 @@ from .spec import (
     PREPROCESSING_VERSION, DATA_RANDOMNESS_VERSION, default_document,
     MODEL_BUILDER_VERSION, MODEL_INITIALIZATION_VERSION, SCHEDULER_VERSION,
     TRAINING_ENGINE_VERSION, RUNTIME_RANDOMNESS_VERSION,
+    SPECIFICATION_VERSION, CIFAR100_MOBILE_EPS0316_VERSION,
 )
 
 
@@ -190,8 +191,8 @@ def _validate(document: dict) -> None:
         if science["training_seed"] is not None and science["training_seed"] not in seeds:
             raise ConfigError("scientific.training_seed: must belong to scientific.training_seeds")
 
-    expected = default_document(dataset, architecture)["scientific"]
-    # Everything outside this explicit list is fixed by main-v1, including budget,
+    expected = _versioned_defaults(dataset, architecture, science["specification_version"])["scientific"]
+    # Everything outside this explicit list is fixed by the selected version, including budget,
     # full split sizes, classifier shape, perturbation, and optimizer-specific fields.
     for key in ("specification_version", "model", "optimizer", "perturbation", "evaluation"):
         _fixed(science[key], expected[key], f"scientific.{key}")
@@ -437,6 +438,15 @@ def _migrate_declaration(document: Mapping) -> dict:
     return result
 
 
+def _versioned_defaults(dataset: str, architecture: str, version: str) -> dict:
+    _choice(version, (SPECIFICATION_VERSION, CIFAR100_MOBILE_EPS0316_VERSION),
+            "scientific.specification_version")
+    try:
+        return default_document(dataset, architecture, specification_version=version)
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
+
+
 def from_declaration(*layers: Mapping, overrides: Mapping[str, Any] | None = None) -> RunConfig:
     """Apply base, dataset, model, then typed CLI overrides, in that order.
 
@@ -455,14 +465,14 @@ def from_declaration(*layers: Mapping, overrides: Mapping[str, Any] | None = Non
     for layer in declarations:
         if "scientific" in layer:
             scientific = _mapping(layer["scientific"], "scientific")
-            for key in ("dataset", "architecture"):
+            for key in ("dataset", "architecture", "specification_version"):
                 if key in scientific:
                     selectors[key] = scientific[key]
-    if set(selectors) != {"dataset", "architecture"}:
+    if not {"dataset", "architecture"} <= selectors.keys():
         raise ConfigError("declarations must select scientific.dataset and scientific.architecture")
     dataset = _choice(selectors["dataset"], DATASETS, "scientific.dataset")
     architecture = _choice(selectors["architecture"], ARCHITECTURES, "scientific.architecture")
-    document = default_document(dataset, architecture)
+    document = _versioned_defaults(dataset, architecture, selectors.get("specification_version", SPECIFICATION_VERSION))
     shape = deepcopy(document)
     for layer in declarations:
         _merge(document, layer, shape)

@@ -25,6 +25,16 @@ unknown names, duplicate YAML keys, non-string mapping keys, YAML merge keys,
 or bool-as-integer coercion are accepted. Numeric strings are not numbers.
 Configuration validation does not import torch or check whether a builder exists.
 
+An explicit second specification version, `main-v1-cifar100-mobile-eps0316`, is
+valid only for CIFAR-100 MobileNetV3-Large with RMSprop epsilon 0.0316. Version and
+epsilon must agree; arbitrary optimizer overrides remain rejected. Schema and
+fingerprint formats stay at 4. Historical `main-v1` declarations, hashes and run
+names remain unchanged. Revised run names append `__recipe-mobile-eps0316-v1`,
+separating their metadata/checkpoints/results/logs from original runs. The existing
+builder's `--cifar100-mobile-eps0316` option selects only those 30 tasks; all other
+210 configurations and identities remain unchanged. See the
+[readiness handoff](cifar100-readiness.md) for phase linkage and storage requirements.
+
 Step 2 adds two fixed scientific fields: `data.preprocessing_version` and
 `data.randomness_version`. They identify the exact approved padding/flip/tensor
 semantics and local epoch/sample keyed RNG contract. Defaults and declarations

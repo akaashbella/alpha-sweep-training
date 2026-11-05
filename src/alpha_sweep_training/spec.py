@@ -4,6 +4,8 @@ from copy import deepcopy
 
 SCHEMA_VERSION = 4
 SPECIFICATION_VERSION = "main-v1"
+CIFAR100_MOBILE_EPS0316_VERSION = "main-v1-cifar100-mobile-eps0316"
+CIFAR100_MOBILE_EPS0316 = 0.0316
 FINGERPRINT_VERSION = 4
 TRAINING_ENGINE_VERSION = "functional-fp32-training-v1"
 RUNTIME_RANDOMNESS_VERSION = "sha256-runtime-streams-v1"
@@ -69,17 +71,26 @@ _OPTIMIZER_RECIPES = {
 }
 
 
-def optimizer_recipe(architecture: str) -> dict:
+def optimizer_recipe(architecture: str, *, dataset: str | None = None,
+                     specification_version: str = SPECIFICATION_VERSION) -> dict:
     """Return an independent declaration; this does not construct an optimizer."""
-    return deepcopy(_OPTIMIZER_RECIPES[architecture])
+    recipe = deepcopy(_OPTIMIZER_RECIPES[architecture])
+    if specification_version == CIFAR100_MOBILE_EPS0316_VERSION:
+        if (dataset, architecture) != ("cifar100", "mobilenetv3_large"):
+            raise ValueError(f"{CIFAR100_MOBILE_EPS0316_VERSION} applies only to CIFAR-100 MobileNetV3-Large")
+        recipe["epsilon"] = CIFAR100_MOBILE_EPS0316
+    elif specification_version != SPECIFICATION_VERSION:
+        raise ValueError(f"Unsupported specification version: {specification_version}")
+    return recipe
 
 
-def default_document(dataset: str, architecture: str) -> dict:
+def default_document(dataset: str, architecture: str, *,
+                     specification_version: str = SPECIFICATION_VERSION) -> dict:
     """Build fixed research settings while leaving undecided settings explicit."""
     return {
         "schema_version": SCHEMA_VERSION,
         "scientific": {
-            "specification_version": SPECIFICATION_VERSION,
+            "specification_version": specification_version,
             "dataset": dataset,
             "architecture": architecture,
             "alpha": 0.0,
@@ -104,7 +115,8 @@ def default_document(dataset: str, architecture: str) -> dict:
                 "num_classes": DATASETS[dataset], "pretrained": False,
                 "stem_policy": "cifar32", "preserve_remaining_structure": True,
             },
-            "optimizer": optimizer_recipe(architecture),
+            "optimizer": optimizer_recipe(architecture, dataset=dataset,
+                                          specification_version=specification_version),
             "training": {
                 "engine_version": TRAINING_ENGINE_VERSION,
                 "randomness_version": RUNTIME_RANDOMNESS_VERSION,

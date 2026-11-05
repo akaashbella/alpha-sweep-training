@@ -107,6 +107,14 @@ remain explicit decisions in [the configuration guide](configuration.md).
 | EfficientNet-B0 | Same specified RMSprop recipe |
 | ConvNeXt-Tiny | AdamW; LR 0.001; weight decay 0.05; betas (0.9, 0.999) |
 
+The explicitly selected `main-v1-cifar100-mobile-eps0316` revision changes only
+CIFAR-100 MobileNetV3-Large RMSprop epsilon to **0.0316**. All other recipe fields
+and scientific settings remain fixed. Historical `main-v1` retains epsilon 0.001.
+The existing manifest builder selects the revision with `--cifar100-mobile-eps0316`;
+see [CIFAR-100 readiness and handoff](cifar100-readiness.md). Adoption follows the
+reported CIFAR-10 result; CIFAR-100 stability requires runtime verification and
+does not establish a forward/backward defect.
+
 `scientific.alpha` always means perturbation strength.
 `scientific.optimizer.rmsprop_alpha` always means RMSprop's smoothing parameter.
 The optimizer never reads the perturbation alpha as its own smoothing factor.
