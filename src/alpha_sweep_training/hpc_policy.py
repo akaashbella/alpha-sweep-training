@@ -90,10 +90,14 @@ class OperationalPolicy:
         resources = exact(doc["resources"], resource_keys | ({"max_queued"} if version == 2 else set()), "resources")
         for key, fixed in (("partition", "dgxh"), ("nodes", 1), ("gpus", 1)):
             same(resources[key], fixed, f"resources.{key}")
-        for key in ("account", "qos", "constraint"):
+        for key in ("account", "qos"):
             if resources[key] is not None:
                 if not re.fullmatch(r"[A-Za-z0-9_.-]+", text(resources[key], key)):
                     raise WorkflowError(f"resources.{key}: use one explicit Slurm identifier/feature")
+        if resources["constraint"] is not None:
+            if not re.fullmatch(r"[A-Za-z0-9_.-]+(?:&[A-Za-z0-9_.-]+)*",
+                                text(resources["constraint"], "constraint")):
+                raise WorkflowError("resources.constraint: use feature identifiers joined only by '&', without whitespace")
         integer(resources["cpus"], "cpus", maximum=PUBLISHED_POLICY["max_cpus"])
         integer(resources["memory_gb"], "memory_gb", maximum=PUBLISHED_POLICY["max_memory_gb"])
         integer(resources["max_concurrent"], "max_concurrent", maximum=PUBLISHED_POLICY["max_gpus"])

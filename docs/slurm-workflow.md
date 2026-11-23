@@ -38,6 +38,13 @@ override is rejected at operational readiness. Historical sealed policies still
 validate as declarations. Relocation requires correctly paired data_root/split_file
 in each separate research input before manifest build, preserving prepared YAML.
 
+`resources.constraint` accepts null, one feature identifier, or identifiers joined
+by `&`, such as `h100&vram80g`. Each identifier uses `[A-Za-z0-9_.-]+`; whitespace,
+empty operands, shell syntax and other constraint operators are rejected. Account
+and QOS still accept only single identifiers or null. Submission carries
+`--constraint=h100&vram80g` as one literal argv element with `shell=False`;
+this does not change scientific identities, concurrency or existing stored policies.
+
 Defaults are unmeasured requests: eight CPUs, 32G memory, twelve hours, up to 40
 queued tasks with at most four running across the workflow, and 600 seconds warning.
 `resources.max_queued` controls wave size; `max_concurrent` controls the Slurm

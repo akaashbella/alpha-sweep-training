@@ -245,5 +245,74 @@ class QueuedWaveChecks(unittest.TestCase):
             validate_plan(seal(bad), manifest, policy)
 
 
+class ConstraintChecks(unittest.TestCase):
+    def test_null_single_and_conjoined_features_preserve_declarations(self):
+        for version in (1, 2):
+            for value in (None, "h100", "vram80g", "gpu_type-1.0", "h100&vram80g",
+                          "h100&vram80g&gpu_type-1.0"):
+                with self.subTest(version=version, constraint=value):
+                    doc = declaration(version)
+                    doc["resources"]["constraint"] = value
+                    before = deepcopy(doc)
+                    policy = OperationalPolicy(doc)
+                    self.assertEqual(doc, before)
+                    self.assertEqual(policy.to_dict(), before)
+                    self.assertEqual(policy.fingerprint, content_identity(before)[7:])
+                    self.assertEqual(policy.to_dict()["resources"]["max_concurrent"], 4)
+
+    def test_invalid_constraints_rejected(self):
+        invalid = ("", "&", "&h100", "h100&", "h100&&vram80g", "h100&&&vram80g",
+            " h100", "h100 ", "h100 &vram80g", "h100& vram80g", "h100\tvram80g",
+            "h100\n", "h100\r", "h100\x00", "h100\u00a0&vram80g", "h100|vram80g",
+            "h100||vram80g", "[h100&vram80g]", "(h100&vram80g)", "h100*2",
+            "h100,vram80g", "h100+vram80g", "!h100", "h100;true", "h100&$(true)",
+            "h100&`true`", "h100>file", "h100\\&vram80g", "'h100&vram80g'",
+            '"h100&vram80g"', "h100/vram80g", False, 0, ["h100", "vram80g"], {})
+        for version in (1, 2):
+            for value in invalid:
+                with self.subTest(version=version, constraint=value), self.assertRaises(WorkflowError):
+                    doc = declaration(version)
+                    doc["resources"]["constraint"] = value
+                    OperationalPolicy(doc)
+
+    def test_account_and_qos_still_accept_only_single_identifiers_or_null(self):
+        for version in (1, 2):
+            for key in ("account", "qos"):
+                for value in (None, "research", "research_account-1.0"):
+                    with self.subTest(version=version, key=key, valid=value):
+                        doc = declaration(version)
+                        doc["resources"].update(constraint="h100&vram80g", **{key: value})
+                        self.assertEqual(OperationalPolicy(doc).to_dict()["resources"][key], value)
+                for value in ("h100&vram80g", "a&&b", "a|b", "a b", " a", "a ", "a\n",
+                              "", "a;true", "$(true)", False, 1, []):
+                    with self.subTest(version=version, key=key, invalid=value), self.assertRaises(WorkflowError):
+                        doc = declaration(version)
+                        doc["resources"][key] = value
+                        OperationalPolicy(doc)
+
+    def test_submission_constraint_remains_one_literal_argv_element_without_shell(self):
+        from alpha_sweep_training.slurm_client import SlurmClient
+        for version, count in ((1, 4), (2, 40)):
+            for value in (None, "h100", "h100&vram80g"):
+                with self.subTest(version=version, constraint=value):
+                    doc = declaration(version)
+                    doc["resources"]["constraint"] = value
+                    policy = OperationalPolicy(doc)
+                    _, bundle = bundle_fixture(policy, count)
+                    # Only operational readiness is mocked on this Windows CPU host.
+                    # The real renderer and client run; subprocess.run is intercepted.
+                    with patch.object(OperationalPolicy, "require_ready"):
+                        args = work_render.submission_arguments(bundle, policy)
+                    expected = [] if value is None else ["--constraint=" + value]
+                    self.assertEqual([arg for arg in args if arg.startswith("--constraint=")], expected)
+                    self.assertIn(f"--array=0-{count - 1}%4", args)
+                    with patch("alpha_sweep_training.slurm_client.subprocess.run",
+                               return_value=SimpleNamespace(returncode=0, stdout="mocked", stderr="")) as run:
+                        self.assertEqual(SlurmClient(policy).invoke("sbatch", args), "mocked")
+                    run.assert_called_once()
+                    self.assertEqual(run.call_args.args[0], ["sbatch", *args])
+                    self.assertIs(run.call_args.kwargs["shell"], False)
+
+
 if __name__ == "__main__":
     unittest.main()
