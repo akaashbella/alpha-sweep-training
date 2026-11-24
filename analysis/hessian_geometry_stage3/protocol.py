@@ -17,6 +17,10 @@ EXAMPLES = {"validation": 5000, "test": 10000}
 HISTORICAL_COMMIT = "8010d07d9d1f0886ab1e180523f316623ef622a4"
 HISTORICAL_SOURCE = "a5726bac3f449455d36e2f53840f3e0fd77768a7ab2b989d2884da20f920005c"
 PRESERVATION = "stage3_parameters_buffers_modules_grad_flags_grad_fields_and_modes_verified"
+WEIGHT_RANKS = {
+    "torch.nn.modules.conv.Conv2d": 4,
+    "torch.nn.modules.linear.Linear": 2,
+}
 
 
 def is_digest(value, size=64):
@@ -29,18 +33,37 @@ def probe_seed(checkpoint, probe, tensor):
 
 
 def validate_layout(layout):
-    entries = layout["tensors"]
-    names = [row["name"] for row in entries]
-    require(names and len(set(names)) == len(names) and all(row["module_type"] in ("Conv2d", "Linear")
-            and row["name"] == (row["module_name"] + "." if row["module_name"] else "") + "weight"
-            and row["requires_grad"] is True and type(row["numel"]) is int and row["numel"] > 0
-            and math.prod(row["shape"]) == row["numel"] for row in entries), "Malformed eligible tensor inventory")
-    stages = layout["stages"]
-    require(len(layout["stage_order"]) == len(stages) and set(layout["stage_order"]) == set(stages) and
-            all(stages.values()) and Counter(name for group in stages.values() for name in group) == Counter(names),
+    require(isinstance(layout, dict), "Malformed eligible tensor layout")
+    entries = layout.get("tensors")
+    require(isinstance(entries, list) and entries, "Malformed eligible tensor inventory")
+    names = []
+    for row in entries:
+        require(isinstance(row, dict), "Malformed eligible tensor descriptor")
+        module_type = row.get("module_type")
+        require(isinstance(module_type, str) and module_type in WEIGHT_RANKS, "Unsupported eligible module type")
+        module_name, shape = row.get("module_name"), row.get("shape")
+        require(isinstance(module_name, str) and row.get("name") == (f"{module_name}.weight" if module_name else "weight")
+                and row.get("requires_grad") is True and type(row.get("numel")) is int
+                and isinstance(shape, list) and len(shape) == WEIGHT_RANKS[module_type]
+                and all(type(dim) is int and dim > 0 for dim in shape) and math.prod(shape) == row["numel"],
+                "Malformed eligible tensor descriptor")
+        names.append(row["name"])
+    require(len(set(names)) == len(names), "Duplicate eligible tensor")
+
+    def valid_groups(groups):
+        return isinstance(groups, dict) and all(
+            isinstance(label, str) and label and isinstance(group, list) and group
+            and all(isinstance(name, str) for name in group) for label, group in groups.items()
+        )
+
+    stages, stage_order = layout.get("stages"), layout.get("stage_order")
+    require(valid_groups(stages) and isinstance(stage_order, list) and all(isinstance(label, str) for label in stage_order)
+            and len(stage_order) == len(stages) and set(stage_order) == set(stages)
+            and Counter(name for group in stages.values() for name in group) == Counter(names),
             "Disjoint stages must cover each eligible tensor exactly once")
-    require(all(group and len(set(group)) == len(group) and set(group) <= set(names)
-                for group in layout["diagnostics"].values()), "Invalid overlapping diagnostic group")
+    diagnostics = layout.get("diagnostics")
+    require(valid_groups(diagnostics) and all(len(set(group)) == len(group) and set(group) <= set(names)
+                for group in diagnostics.values()), "Invalid overlapping diagnostic group")
 
 
 def decomposition(layout, tensors):
@@ -57,20 +80,28 @@ def decomposition(layout, tensors):
 
 
 def corrected(row):
+    from alpha_sweep_training.manifests import DATA_KEYS
+
     evidence = row["evidence"]
     key, science, binding = row["key"], evidence["scientific"], evidence["binding"]
     require((science["dataset"], science["architecture"], science["alpha"], science["training_seed"]) ==
             tuple(key[k] for k in ("dataset", "architecture", "training_alpha", "training_seed")),
             "Stage 2 scientific selection/checkpoint identity mismatch")
     train, best = binding["training_identity"], binding["best_checkpoint_identity"]
+    reference = binding["best_checkpoint"]
+    prepared = evidence["prepared_data"]
+    require(isinstance(prepared, dict) and set(prepared) == DATA_KEYS and
+            all(isinstance(value, str) and value.startswith("sha256:") and is_digest(value[7:])
+                and binding["data_identity"].get(key) == value for key, value in prepared.items()),
+            "Missing or mismatched Stage 2 prepared-data identities")
     require(all(binding[k] == key[k] for k in key) and train["run_id"] == row["run_id"] and
             is_digest(train["scientific_fingerprint"]) and is_digest(best["sha256"]) and is_digest(best["generation"], 32)
-            and binding["best_checkpoint"]["sha256"] == best["sha256"] and
-            binding["best_checkpoint"]["role"] == "best" and
-            all(binding["data_identity"].get(k) == v for k, v in evidence["prepared_data"].items()),
-            "Stage 2 best checkpoint fingerprint, generation, digest or prepared identity mismatch")
+            and reference["sha256"] == best["sha256"] and reference["role"] == "best"
+            and reference.get("relative_path") == f"generations/{best['generation']}.best.pt",
+            "Stage 2 best checkpoint fingerprint, generation, digest or reference mismatch")
     require(train["specification_version"] == science["specification_version"] and
-            evidence["format_version"] == 1 and is_digest(evidence["best_training_provenance"]["code"]["source_sha256"]),
+            type(evidence["format_version"]) is int and evidence["format_version"] == 1 and
+            is_digest(evidence["best_training_provenance"]["code"]["source_sha256"]),
             "Unsupported checkpoint schema or absent historical source digest")
     if key["architecture"] == "mobilenetv3_large":
         optimum = evidence["best_optimizer"]

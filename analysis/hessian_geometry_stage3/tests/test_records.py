@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import patch
 
 import torch
+from alpha_sweep_training.manifests import DATA_KEYS
 from analysis.layer_sensitivity_stage2.groups import targets
 
 from ..comparison import comparison_metrics, fit_pair, settings_relation, stage2_comparison
@@ -32,7 +33,7 @@ def row(dataset="cifar10", architecture="resnet50", alpha=0., historical=False):
     recipe = {"name": "rmsprop", "epsilon": .0316}
     science = {"dataset": dataset, "architecture": architecture, "alpha": alpha, "training_seed": 3,
                "specification_version": "fixture", "optimizer": recipe}
-    prepared = {"split_identity": "synthetic-split"}
+    prepared = {name: "sha256:"+identity({"synthetic": name}) for name in sorted(DATA_KEYS)}
     native = {"checkpoint_id": identity(key)[:20], "key": key, "status": "eligible", "run_id": run_id, "layout": layout(),
               "source": {"manifest_sha256": "e"*64},
               "targets": [{"id": "network:all"}, {"id": "stage:stem"}, {"id": "stage:head"}],
@@ -40,8 +41,10 @@ def row(dataset="cifar10", architecture="resnet50", alpha=0., historical=False):
                            "best_optimizer": {"declared_recipe": recipe, "effective_options": {"eps": .0316}},
                            "best_training_provenance": {"code": {"commit": HISTORICAL_COMMIT, "source_sha256": HISTORICAL_SOURCE}},
                            "binding": {**key, "training_identity": {"run_id": run_id, "specification_version": "fixture", "scientific_fingerprint": "c"*64},
-                                       "best_checkpoint_identity": BEST, "best_checkpoint": {"role": "best", "sha256": BEST["sha256"]},
-                                       "data_identity": prepared}}}
+                                       "best_checkpoint_identity": BEST, "best_checkpoint": {
+                                           "role": "best", "sha256": BEST["sha256"], "completed_epochs": 10,
+                                           "relative_path": f"generations/{BEST['generation']}.best.pt",
+                                       }, "data_identity": {**prepared, "dataset": dataset, "training_seed": key["training_seed"]}}}}
     scales = [dict(t, population_std=1. if i else .5) for i,t in enumerate(layout()["tensors"])]
     earlier = {"precision": {"mode": "amp_bfloat16"}, "effective_backend": {"allow_tf32_cudnn": True}}
     return {"checkpoint_id": native["checkpoint_id"], "key": key, "status": "eligible", "stage2_row": native,
@@ -124,6 +127,20 @@ class RecordsTests(unittest.TestCase):
         old = deepcopy(checkpoint)
         old["evidence"]["binding"]["best_checkpoint"]["sha256"] = "d"*64
         with self.assertRaisesRegex(Stage3Error, "mismatch"):
+            corrected(old)
+        old = deepcopy(checkpoint)
+        old["evidence"]["binding"]["best_checkpoint"]["relative_path"] = f"generations/{'e'*32}.best.pt"
+        with self.assertRaisesRegex(Stage3Error, "reference mismatch"):
+            corrected(old)
+        for missing in ({}, {name: value for name, value in checkpoint["evidence"]["prepared_data"].items()
+                             if name != "normalization_identity"}):
+            old = deepcopy(checkpoint)
+            old["evidence"]["prepared_data"] = missing
+            with self.assertRaisesRegex(Stage3Error, "prepared-data identities"):
+                corrected(old)
+        old = deepcopy(checkpoint)
+        old["evidence"]["binding"]["data_identity"]["preparation_identity"] = "sha256:" + "e"*64
+        with self.assertRaisesRegex(Stage3Error, "prepared-data identities"):
             corrected(old)
 
     def test_runtime_data_and_incomplete_probes_reject(self):

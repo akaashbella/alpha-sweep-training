@@ -146,7 +146,8 @@ class HessianTests(unittest.TestCase):
 
 
 def entry(name):
-    return {"name": name+".weight", "module_name": name, "module_type": "Linear", "shape": [1], "numel": 1, "requires_grad": True}
+    return {"name": name+".weight", "module_name": name, "module_type": "torch.nn.modules.linear.Linear",
+            "shape": [1, 1], "numel": 1, "requires_grad": True}
 
 
 def make_layout(entries):
